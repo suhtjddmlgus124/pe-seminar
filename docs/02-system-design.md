@@ -65,3 +65,6 @@
 - **선택지:** 카카오톡 저장소 접근, `NotificationListener`로 모든 알림 수집
 - **고른 것:** `NotificationListener`. 카카오톡 저장소는 다른 앱에서 접근할 수 없다.
 - **대가:** push가 오지 않으면 수집할 수 없으며, 앱을 설치하기 전 대화 내용은 수집할 수 없다.
+
+### Android 앱만 배포한다.
+- `NotificationLister`와 같은 기능은 안드로이드 앱에서만 사용할 수 있다.
