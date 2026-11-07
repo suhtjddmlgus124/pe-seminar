@@ -1,114 +1,146 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Button, FlatList, StyleSheet, View } from 'react-native';
+import { Link, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
+import { ActivityIndicator, Button, FlatList, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import NotificationListener, { type CollectedNotification } from '@/modules/notification-listener';
+import { useKakaoMessages } from '@/hooks/use-kakao-messages';
+import { type KakaoMessage } from '@/modules/notification-listener';
+
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return '시각 확인 불가';
+  return date.toLocaleString('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+}
+
+function MessageCard({ message }: { message: KakaoMessage }) {
+  const resolvedRoom = message.roomSource === 'conversationShortcut'
+    || message.roomSource === 'conversationTitle'
+    || message.roomSource === 'hiddenConversationTitle';
+  const chatType = message.isGroupChat ? '그룹 채팅' : '1:1 채팅';
+
+  return (
+    <ThemedView type="backgroundElement" style={styles.message}>
+      <View style={styles.roomHeader}>
+        <ThemedText type="smallBold" selectable style={styles.room}>
+          {resolvedRoom && message.room ? message.room : '채팅방 이름 확인 불가'}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary">
+          {chatType}{message.isGroupChatSource === 'inferred' ? ' (추정)' : ''}
+        </ThemedText>
+      </View>
+      <ThemedText type="small" themeColor="textSecondary" selectable>
+        보낸 사람 · {message.sender}
+      </ThemedText>
+      <ThemedText selectable style={styles.messageText}>{message.msg}</ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        {message.timestampSource === 'message' ? '메시지 시각' : '알림 시각'} · {formatTimestamp(message.timestamp)}
+      </ThemedText>
+    </ThemedView>
+  );
+}
 
 export default function HomeScreen() {
-  const available = NotificationListener.isAvailable();
-  const [granted, setGranted] = useState(() => NotificationListener.isPermissionGranted());
-  const [notifications, setNotifications] = useState<CollectedNotification[]>([]);
-  const [refreshing, setRefreshing] = useState(available);
-  const [error, setError] = useState<string | null>(null);
-  const mounted = useRef(false);
-  const requestId = useRef(0);
+  const {
+    available, granted, messages, refreshing, loadingMore, hasMore,
+    error, refresh, loadMore, openSettings, trackedRooms, trackingLoading,
+  } = useKakaoMessages();
 
-  const refresh = useCallback(() => {
-    if (!available) return Promise.resolve();
-    const request = ++requestId.current;
-    return NotificationListener.getCollectedNotifications({ limit: 100 })
-      .then((collected) => {
-        if (!mounted.current || request !== requestId.current) return;
-        setNotifications(collected);
-        setGranted(NotificationListener.isPermissionGranted());
-        setError(null);
-      })
-      .catch((reason: unknown) => {
-        if (mounted.current && request === requestId.current) {
-          setError(reason instanceof Error ? reason.message : '알림 기록을 불러오지 못했습니다.');
-        }
-      })
-      .finally(() => {
-        if (mounted.current && request === requestId.current) setRefreshing(false);
-      });
-  }, [available]);
-
-  useEffect(() => {
-    if (!available) return;
-    mounted.current = true;
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-    // Subscribe before loading history so notifications received during loading are included.
-    const subscription = NotificationListener.addNotificationListener(() => {
-      if (refreshTimer !== undefined) return;
-      refreshTimer = setTimeout(() => {
-        refreshTimer = undefined;
-        void refresh();
-      }, 200);
-    });
-    const appState = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refresh();
-    });
-    void refresh();
-    return () => {
-      mounted.current = false;
-      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
-      subscription.remove();
-      appState.remove();
-    };
-  }, [available, refresh]);
+  useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
 
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <FlatList
-          data={notifications}
-          keyExtractor={(item) => String(item.collectionId)}
+          data={messages}
+          keyExtractor={(item) => String(item.messageId)}
           contentContainerStyle={styles.list}
           refreshing={refreshing}
-          onRefresh={available ? () => { setRefreshing(true); void refresh(); } : undefined}
+          onRefresh={available ? () => { void refresh(); } : undefined}
           ListHeaderComponent={
             <View style={styles.header}>
-              <ThemedText type="subtitle">알림 JSON</ThemedText>
+              <ThemedText type="subtitle">카카오톡 메시지</ThemedText>
               <ThemedText themeColor="textSecondary">
-                모듈에서 수집한 최근 알림 100개의 전체 객체를 JSON 그대로 표시합니다.
+                등록한 추적 채팅방의 메시지를 최신 시각순으로 표시합니다.
+                이전 기록도 계속 불러올 수 있습니다.
               </ThemedText>
+              <ThemedView type="backgroundElement" style={styles.trackingNotice}>
+                <ThemedText type="small">
+                  {trackingLoading
+                    ? '추적 채팅방 설정을 확인하는 중입니다.'
+                    : !available ? 'Android 앱에서 추적할 채팅방을 등록해 주세요.'
+                      : error ? '추적 설정과 메시지 기록을 확인해 주세요.'
+                        : trackedRooms.length === 0 ? '추적 채팅방이 없어 새 메시지 수집이 중단되어 있습니다.'
+                          : `${trackedRooms.length}개 채팅방을 추적하고 있습니다.`}
+                </ThemedText>
+                <Link href="./tracked-rooms" accessibilityRole="link">
+                  <ThemedText type="linkPrimary">추적 채팅방 등록·관리</ThemedText>
+                </Link>
+              </ThemedView>
               <ThemedText type="smallBold">
                 {!available
-                  ? 'Android 전용 기능입니다.'
+                  ? 'Android 앱에서 사용할 수 있습니다.'
                   : granted ? '알림 접근 권한이 허용되어 있습니다.' : '알림 접근 권한을 허용해 주세요.'}
               </ThemedText>
               {available ? (
-                <Button
-                  title="알림 접근 설정 열기"
-                  onPress={() => {
-                    NotificationListener.openSettings().catch((reason: unknown) => {
-                      setError(reason instanceof Error ? reason.message : '설정을 열지 못했습니다.');
-                    });
-                  }}
-                />
+                <Button title="알림 접근 설정 열기" onPress={openSettings} />
               ) : (
                 <ThemedText type="small" themeColor="textSecondary">
-                  알림 수집 기능이 포함된 Android 앱에서 사용할 수 있습니다.
+                  알림 수집 모듈이 포함된 Android 앱이 필요합니다.
                 </ThemedText>
               )}
-              {error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
+              {available && !granted && (
+                <ThemedText type="small" themeColor="textSecondary">
+                  설정에서 이 앱의 알림 접근을 허용하면 등록한 채팅방의 새 메시지를 수집합니다.
+                  이미 저장된 기록은 권한 없이도 볼 수 있습니다.
+                </ThemedText>
+              )}
+              {error && (
+                <View style={styles.error}>
+                  <ThemedText accessibilityRole="alert">{error}</ThemedText>
+                  <Button
+                    title="다시 불러오기"
+                    onPress={() => { void refresh(); }}
+                    disabled={refreshing}
+                  />
+                </View>
+              )}
             </View>
           }
           ListEmptyComponent={
-            <ThemedText themeColor="textSecondary">
-              {refreshing ? '수집 기록을 불러오는 중입니다.' : '아직 수집된 알림이 없습니다.'}
-            </ThemedText>
-          }
-          renderItem={({ item }) => (
-            <ThemedView type="backgroundElement" style={styles.notification}>
-              <ThemedText type="code" selectable style={styles.json}>
-                {JSON.stringify(item, null, 2)}
+            <View style={styles.empty}>
+              {refreshing && <ActivityIndicator />}
+              <ThemedText themeColor="textSecondary">
+                {refreshing
+                  ? '메시지 기록을 불러오는 중입니다.'
+                  : error ? '기록을 불러오지 못했습니다.'
+                    : !available ? '메시지 목록은 Android 앱에서 확인해 주세요.'
+                      : trackingLoading ? '추적 채팅방 설정을 확인하는 중입니다.'
+                        : trackedRooms.length === 0 ? '추적 채팅방 탭에서 채팅방을 먼저 등록해 주세요.'
+                          : '등록한 채팅방에서 아직 수집된 카카오톡 메시지가 없습니다.'}
               </ThemedText>
-            </ThemedView>
-          )}
+            </View>
+          }
+          ListFooterComponent={messages.length > 0 ? (
+            <View style={styles.footer}>
+              {loadingMore ? (
+                <View style={styles.loadingMore}>
+                  <ActivityIndicator />
+                  <ThemedText type="small" themeColor="textSecondary">이전 메시지를 불러오는 중입니다.</ThemedText>
+                </View>
+              ) : hasMore ? (
+                <Button title="이전 메시지 더 보기" onPress={loadMore} />
+              ) : (
+                <ThemedText type="small" themeColor="textSecondary">저장된 메시지를 모두 불러왔습니다.</ThemedText>
+              )}
+            </View>
+          ) : undefined}
+          renderItem={({ item }) => <MessageCard message={item} />}
         />
       </SafeAreaView>
     </ThemedView>
@@ -120,6 +152,13 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
   list: { padding: Spacing.four, paddingBottom: BottomTabInset + Spacing.four, gap: Spacing.three },
   header: { gap: Spacing.three, marginBottom: Spacing.three },
-  notification: { padding: Spacing.three, borderRadius: Spacing.three, gap: Spacing.two },
-  json: { fontWeight: '400', lineHeight: 18 },
+  trackingNotice: { padding: Spacing.three, borderRadius: Spacing.three, gap: Spacing.two },
+  message: { padding: Spacing.three, borderRadius: Spacing.three, gap: Spacing.two },
+  roomHeader: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: Spacing.two },
+  room: { flexGrow: 1, flexShrink: 1 },
+  messageText: { fontWeight: '400', paddingVertical: Spacing.one },
+  error: { gap: Spacing.two },
+  empty: { gap: Spacing.three, paddingVertical: Spacing.four },
+  footer: { alignItems: 'center', paddingVertical: Spacing.three },
+  loadingMore: { alignItems: 'center', gap: Spacing.two },
 });
