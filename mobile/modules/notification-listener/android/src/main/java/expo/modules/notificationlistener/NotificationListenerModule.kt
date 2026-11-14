@@ -19,10 +19,16 @@ class NotificationListenerModule : Module() {
     sendEvent("onNotificationPosted", notification)
   }
 
+  private val kakaoObserver: (Map<String, Any?>) -> Unit = { message ->
+    sendEvent("onKakaoMessage", message)
+  }
+
   override fun definition() = ModuleDefinition {
     Name("NotificationListener")
 
-    Events("onNotificationPosted")
+    Constant("roomResolutionVersion") { 1 }
+
+    Events("onNotificationPosted", "onKakaoMessage")
 
     Function("isPermissionGranted") {
       val component = ComponentName(context, NotificationListenerService::class.java)
@@ -70,6 +76,51 @@ class NotificationListenerModule : Module() {
       }
     }
 
+    AsyncFunction("getTrackedRooms") { promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getTrackedRooms())
+        } catch (error: Exception) {
+          promise.reject("ERR_TRACKED_ROOMS_READ", "추적할 채팅방 목록을 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("setTrackedRooms") { rooms: List<String>, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).setTrackedRooms(rooms))
+        } catch (error: Exception) {
+          promise.reject("ERR_TRACKED_ROOMS_WRITE", "추적할 채팅방 목록을 저장하지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("getKakaoMessages") { limit: Int, beforeId: Long?, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getKakaoMessages(limit, beforeId))
+        } catch (error: Exception) {
+          promise.reject("ERR_KAKAO_MESSAGES_READ", "카카오톡 메시지 기록을 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("clearKakaoMessages") { promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          NotificationStore.getInstance(application).clearKakaoMessages()
+          promise.resolve()
+        } catch (error: Exception) {
+          promise.reject("ERR_KAKAO_MESSAGES_CLEAR", "카카오톡 메시지 기록을 삭제하지 못했습니다.", error)
+        }
+      }
+    }
+
     OnStartObserving("onNotificationPosted") {
       NotificationListenerService.observers.add(observer)
     }
@@ -78,8 +129,17 @@ class NotificationListenerModule : Module() {
       NotificationListenerService.observers.remove(observer)
     }
 
+    OnStartObserving("onKakaoMessage") {
+      NotificationListenerService.kakaoObservers.add(kakaoObserver)
+    }
+
+    OnStopObserving("onKakaoMessage") {
+      NotificationListenerService.kakaoObservers.remove(kakaoObserver)
+    }
+
     OnDestroy {
       NotificationListenerService.observers.remove(observer)
+      NotificationListenerService.kakaoObservers.remove(kakaoObserver)
     }
   }
 }

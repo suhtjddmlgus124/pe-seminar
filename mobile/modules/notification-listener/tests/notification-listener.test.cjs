@@ -10,6 +10,8 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 
 function load(nativeModule = null, platform = 'android') {
+  // Fixtures model the current APK unless they explicitly override its capability version.
+  if (nativeModule) nativeModule = { roomResolutionVersion: 1, ...nativeModule };
   const context = {
     exports: {},
     require(name) {
@@ -28,12 +30,196 @@ test('unsupported platforms and Expo Go cannot invoke native collection APIs', a
     assert.equal(listener.isAvailable(), false);
     assert.equal(listener.isPermissionGranted(), false);
     await assert.rejects(listener.getCollectedNotifications(), /Android build/);
+    await assert.rejects(listener.getKakaoMessages(), /Android build/);
+    await assert.rejects(listener.clearKakaoMessages(), /Android build/);
     await assert.rejects(listener.clearCollectedNotifications(), /Android build/);
+    await assert.rejects(listener.getTrackedRooms(), /Android build/);
+    await assert.rejects(listener.setTrackedRooms([]), /Android build/);
     await assert.rejects(listener.openSettings(), /Android build/);
     assert.throws(() => listener.addNotificationListener(() => {}), /Android build/);
+    assert.throws(() => listener.addKakaoMessageListener(() => {}), /Android build/);
   }
   assert.equal(load({}, 'ios').isAvailable(), false);
   assert.equal(load({}, 'web').isAvailable(), false);
+});
+
+test('tracking settings require both native APIs and give older APKs a Korean rebuild instruction', async () => {
+  for (const native of [{}, { getTrackedRooms() {} }, { setTrackedRooms() {} }]) {
+    const listener = load(native);
+    assert.equal(listener.isTrackedRoomsSupported(), false);
+    await assert.rejects(listener.getTrackedRooms(), /추적 채팅방.*새 Android 개발 빌드/);
+    await assert.rejects(listener.setTrackedRooms(['Room']), /새 Android 개발 빌드/);
+    await assert.rejects(listener.addTrackedRoom('Room'), /새 Android 개발 빌드/);
+  }
+});
+
+test('APKs with the old sender-as-room parser cannot supply tracking settings or messages', async () => {
+  let reads = 0;
+  for (const roomResolutionVersion of [undefined, 0]) {
+    const listener = load({
+      roomResolutionVersion,
+      async getTrackedRooms() { reads++; return ['Sender']; },
+      async setTrackedRooms() { throw new Error('Must not write to an old APK'); },
+      async getKakaoMessages() { reads++; return [{ room: 'Sender', roomSource: 'title' }]; },
+    });
+    assert.equal(listener.isTrackedRoomsSupported(), false);
+    await assert.rejects(listener.getTrackedRooms(), /채팅방 이름 추출.*새 Android 개발 빌드/);
+    await assert.rejects(listener.setTrackedRooms(['Sender']), /채팅방 이름 추출/);
+    await assert.rejects(listener.getKakaoMessages(), /채팅방 이름 추출/);
+    assert.throws(() => listener.addKakaoMessageListener(() => {}), /채팅방 이름 추출/);
+  }
+  assert.equal(reads, 0);
+});
+
+test('tracked rooms are normalized and published only after the database confirms a save', async () => {
+  let confirmSave;
+  let submitted;
+  const listener = load({
+    async getTrackedRooms() { return []; },
+    setTrackedRooms(rooms) {
+      submitted = Array.from(rooms);
+      return new Promise((resolve) => { confirmSave = resolve; });
+    },
+  });
+  assert.equal(listener.isTrackedRoomsSupported(), true);
+  const changes = [];
+  const subscription = listener.addTrackedRoomsListener((rooms) => changes.push(Array.from(rooms)));
+  const pending = listener.setTrackedRooms([' Beta ', '', 'Alpha', 'Beta', '  ', ' Alpha ']);
+  await Promise.resolve();
+  assert.deepEqual(submitted, ['Alpha', 'Beta']);
+  assert.deepEqual(changes, []);
+  confirmSave(['Alpha', 'Beta']);
+  assert.deepEqual(Array.from(await pending), ['Alpha', 'Beta']);
+  assert.deepEqual(changes, [['Alpha', 'Beta']]);
+  subscription.remove();
+});
+
+test('failed tracking writes publish nothing and do not poison the next queued edit', async () => {
+  const failure = new Error('DB full');
+  let rooms = ['Saved'];
+  let writes = 0;
+  const listener = load({
+    async getTrackedRooms() { return rooms; },
+    async setTrackedRooms(next) {
+      if (++writes === 1) throw failure;
+      rooms = Array.from(next);
+      return rooms;
+    },
+  });
+  const changes = [];
+  listener.addTrackedRoomsListener((next) => changes.push(Array.from(next)));
+  const failed = listener.addTrackedRoom('Failed');
+  const successful = listener.addTrackedRoom('Added');
+  await assert.rejects(failed, (error) => error === failure);
+  assert.deepEqual(Array.from(await successful), ['Added', 'Saved']);
+  assert.deepEqual(changes, [['Added', 'Saved']]);
+});
+
+test('read-modify-write tracking edits from multiple tabs are serialized without losing names', async () => {
+  let rooms = ['Original'];
+  let activeWrites = 0;
+  let maximumWrites = 0;
+  const writes = [];
+  const listener = load({
+    async getTrackedRooms() { return [...rooms]; },
+    async setTrackedRooms(next) {
+      maximumWrites = Math.max(maximumWrites, ++activeWrites);
+      await Promise.resolve();
+      rooms = Array.from(next);
+      writes.push([...rooms]);
+      activeWrites -= 1;
+      return [...rooms];
+    },
+  });
+  await Promise.all([
+    listener.addTrackedRoom(' A '), listener.addTrackedRoom('B'),
+    listener.removeTrackedRoom('Original'), listener.setTrackedRooms(['Only']),
+    listener.addTrackedRoom('Last'),
+  ]);
+  assert.equal(maximumWrites, 1);
+  assert.deepEqual(writes, [
+    ['A', 'Original'], ['A', 'B', 'Original'], ['A', 'B'], ['Only'], ['Last', 'Only'],
+  ]);
+  assert.deepEqual(Array.from(await listener.getTrackedRooms()), ['Last', 'Only']);
+});
+
+test('empty tracked rooms persist and unchanged reads do not repeatedly invalidate history', async () => {
+  let rooms = ['Room'];
+  let reads = 0;
+  const listener = load({
+    async getTrackedRooms() { reads++; return [...rooms]; },
+    async setTrackedRooms(next) { rooms = Array.from(next); return rooms; },
+  });
+  const changes = [];
+  listener.addTrackedRoomsListener((next) => changes.push(Array.from(next)));
+  await listener.getTrackedRooms();
+  await listener.getTrackedRooms();
+  assert.deepEqual(Array.from(await listener.setTrackedRooms([])), []);
+  await listener.getTrackedRooms();
+  assert.deepEqual(changes, [['Room'], []]);
+  assert.equal(reads, 3);
+  await assert.rejects(listener.addTrackedRoom('  '), /채팅방 이름을 입력/);
+  await assert.rejects(listener.setTrackedRooms([null]), /문자열 목록/);
+  assert.equal(reads, 3);
+});
+
+test('older Android builds report the required upgrade before invoking new native APIs', async () => {
+  const listener = load({ isPermissionGranted: () => true });
+  await assert.rejects(listener.getKakaoMessages(), /새 Android 개발 빌드/);
+  await assert.rejects(listener.clearKakaoMessages(), /새 Android 개발 빌드/);
+  assert.throws(() => listener.addKakaoMessageListener(() => {}), /새 Android 개발 빌드/);
+  assert.throws(() => listener.addListener('onKakaoMessage', () => {}), /새 Android 개발 빌드/);
+});
+
+test('Kakao history pagination preserves extraction sources and message timestamps', async () => {
+  const records = [{
+    messageId: 12, room: '수학과제토론방', sender: '사용자A', msg: '문제 같이 풀어요',
+    timestamp: 1793433482809, timestampSource: 'message', roomSource: 'conversationTitle',
+    isGroupChat: true, isGroupChatSource: 'notification', notificationKey: 'chat-1',
+  }];
+  const calls = [];
+  const listener = load({
+    async getKakaoMessages(...args) { calls.push(args); return records; },
+  });
+  assert.equal(await listener.getKakaoMessages(), records);
+  assert.equal(await listener.getKakaoMessages({ limit: 50, beforeId: 12 }), records);
+  assert.deepEqual(calls, [[100, null], [50, 12]]);
+  for (const options of [{ limit: 0 }, { limit: 501 }, { beforeId: 0 }, { beforeId: 1.5 }]) {
+    await assert.rejects(listener.getKakaoMessages(options), /must be/);
+  }
+  assert.equal(calls.length, 2);
+});
+
+test('Kakao events expose the generic and convenience subscription APIs', async () => {
+  const callbacks = new Set();
+  let cleared = false;
+  const listener = load({
+    async getKakaoMessages() { return []; },
+    async clearKakaoMessages() { cleared = true; },
+    addListener(name, callback) {
+      assert.equal(name, 'onKakaoMessage');
+      callbacks.add(callback);
+      return { remove() { callbacks.delete(callback); } };
+    },
+  });
+  const received = [];
+  const first = listener.addListener('onKakaoMessage', (message) => received.push(message));
+  const second = listener.addKakaoMessageListener((message) => received.push(message));
+  const message = { messageId: 3, room: 'Room', sender: 'Sender', msg: 'Body', timestamp: 100 };
+  for (const callback of callbacks) callback(message);
+  assert.deepEqual(received, [message, message]);
+  first.remove();
+  second.remove();
+  assert.equal(callbacks.size, 0);
+  assert.equal(cleared, false);
+  await listener.clearKakaoMessages();
+  assert.equal(cleared, true);
+});
+
+test('Kakao history read failures remain distinguishable from an empty list', async () => {
+  const failure = new Error('Kakao database unavailable');
+  const listener = load({ async getKakaoMessages() { throw failure; } });
+  await assert.rejects(listener.getKakaoMessages(), (error) => error === failure);
 });
 
 test('history is available without current permission and preserves native record metadata', async () => {
