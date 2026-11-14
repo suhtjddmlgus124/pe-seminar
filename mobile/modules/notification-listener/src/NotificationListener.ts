@@ -21,6 +21,7 @@ declare class NotificationListenerNativeModule extends NativeModule<Notification
   clearKakaoMessages(): Promise<void>;
   getTrackedRooms(): Promise<string[]>;
   setTrackedRooms(rooms: string[]): Promise<string[]>;
+  getDiscoveredRooms(): Promise<string[]>;
 }
 
 const nativeModule =
@@ -57,6 +58,15 @@ function requireTrackedRoomsModule(): NotificationListenerNativeModule {
   const module = requireModule();
   if (typeof module.getTrackedRooms !== 'function' || typeof module.setTrackedRooms !== 'function') {
     throw new Error('추적 채팅방 설정 기능이 포함된 새 Android 개발 빌드를 설치해 주세요.');
+  }
+  requireRoomResolution(module);
+  return module;
+}
+
+function requireDiscoveredRoomsModule(): NotificationListenerNativeModule {
+  const module = requireModule();
+  if (typeof module.getDiscoveredRooms !== 'function') {
+    throw new Error('알림에서 발견한 채팅방 기능이 포함된 새 Android 개발 빌드를 설치해 주세요.');
   }
   requireRoomResolution(module);
   return module;
@@ -127,6 +137,21 @@ const NotificationListener = {
       && typeof nativeModule.setTrackedRooms === 'function' && nativeModule.roomResolutionVersion >= 1;
   },
 
+  isDiscoveredRoomsSupported(): boolean {
+    return nativeModule !== null && typeof nativeModule.getDiscoveredRooms === 'function'
+      && nativeModule.roomResolutionVersion >= 1;
+  },
+
+  /** Observed names only. Registration controls which stored messages are visible. */
+  async getDiscoveredRooms(): Promise<string[]> {
+    return normalizeRooms(await requireDiscoveredRoomsModule().getDiscoveredRooms());
+  },
+
+  /** Re-read names after the native database commits a newly discovered room. */
+  addDiscoveredRoomsListener(listener: () => void): EventSubscription {
+    return requireDiscoveredRoomsModule().addListener('onDiscoveredRoomsChanged', listener);
+  },
+
   async getTrackedRooms(): Promise<string[]> {
     const module = requireTrackedRoomsModule();
     return queueTrackedRooms(async () => publishRooms(await module.getTrackedRooms()));
@@ -185,7 +210,8 @@ const NotificationListener = {
     eventName: EventName,
     listener: NotificationListenerEvents[EventName]
   ): EventSubscription {
-    const module = eventName === 'onKakaoMessage' ? requireKakaoModule() : requireModule();
+    const module = eventName === 'onKakaoMessage' ? requireKakaoModule()
+      : eventName === 'onDiscoveredRoomsChanged' ? requireDiscoveredRoomsModule() : requireModule();
     return module.addListener(eventName, listener);
   },
 

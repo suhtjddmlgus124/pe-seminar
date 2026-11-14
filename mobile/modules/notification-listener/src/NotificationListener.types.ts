@@ -89,4 +89,5 @@ export type TrackedRoomsChangeListener = (rooms: string[]) => void;
 export type NotificationListenerEvents = {
   onNotificationPosted: (notification: CollectedNotification) => void;
   onKakaoMessage: (message: KakaoMessage) => void;
+  onDiscoveredRoomsChanged: () => void;
 };

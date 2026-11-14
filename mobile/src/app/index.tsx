@@ -75,8 +75,8 @@ export default function HomeScreen() {
                     ? '추적 채팅방 설정을 확인하는 중입니다.'
                     : !available ? 'Android 앱에서 추적할 채팅방을 등록해 주세요.'
                       : error ? '추적 설정과 메시지 기록을 확인해 주세요.'
-                        : trackedRooms.length === 0 ? '추적 채팅방이 없어 새 메시지 수집이 중단되어 있습니다.'
-                          : `${trackedRooms.length}개 채팅방을 추적하고 있습니다.`}
+                        : trackedRooms.length === 0 ? '채팅방을 등록하면 저장해 둔 메시지를 볼 수 있습니다.'
+                          : `${trackedRooms.length}개 채팅방의 메시지를 표시하고 있습니다.`}
                 </ThemedText>
                 <Link href="./tracked-rooms" accessibilityRole="link">
                   <ThemedText type="linkPrimary">추적 채팅방 등록·관리</ThemedText>
@@ -96,7 +96,8 @@ export default function HomeScreen() {
               )}
               {available && !granted && (
                 <ThemedText type="small" themeColor="textSecondary">
-                  설정에서 이 앱의 알림 접근을 허용하면 등록한 채팅방의 새 메시지를 수집합니다.
+                  설정에서 이 앱의 알림 접근을 허용하면 이름을 확인할 수 있는 채팅방의 메시지를
+                  등록 여부와 관계없이 기기에 저장합니다. 등록한 방의 메시지만 목록에 표시합니다.
                   이미 저장된 기록은 권한 없이도 볼 수 있습니다.
                 </ThemedText>
               )}

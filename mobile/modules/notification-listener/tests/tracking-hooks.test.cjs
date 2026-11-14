@@ -13,6 +13,7 @@ function compile(path) {
 const wrapperSource = compile('../src/NotificationListener.ts');
 const messagesSource = compile('../../../src/hooks/use-kakao-messages.ts');
 const roomsSource = compile('../../../src/hooks/use-tracked-rooms.ts');
+const discoveredRoomsSource = compile('../../../src/hooks/use-discovered-rooms.ts');
 
 function loadWrapper(native) {
   native = { roomResolutionVersion: 1, ...native };
@@ -33,6 +34,7 @@ function host(source, exportName, listener, foregroundListeners) {
   const slots = [];
   let index = 0;
   let effects = [];
+  let stateWrites = 0;
   const same = (left, right) => left && right && left.length === right.length
     && left.every((item, position) => Object.is(item, right[position]));
   const react = {
@@ -40,6 +42,7 @@ function host(source, exportName, listener, foregroundListeners) {
       const position = index++;
       if (!slots[position]) slots[position] = { value: typeof initial === 'function' ? initial() : initial };
       return [slots[position].value, (next) => {
+        stateWrites++;
         slots[position].value = typeof next === 'function' ? next(slots[position].value) : next;
       }];
     },
@@ -91,6 +94,7 @@ function host(source, exportName, listener, foregroundListeners) {
       return value;
     },
     unmount() { for (const slot of slots) slot?.cleanup?.(); },
+    stateWrites() { return stateWrites; },
   };
   result.snapshot();
   return result;
@@ -132,6 +136,47 @@ test('empty tracked rooms display no messages and skip native history reads', as
   for (const callback of f.events) callback(message(9, 'Untracked'));
   assert.deepEqual(plain(hook.snapshot().messages), []);
   hook.unmount();
+});
+
+test('registering reveals retained messages without a new event and removing keeps them hidden until re-registration', async () => {
+  const f = fixture([]);
+  const stored = [message(1, 'Observed'), message(2, 'Other hidden room')];
+  f.native.getKakaoMessages = async () => {
+    f.state.reads++;
+    return stored.filter((item) => f.state.rooms.includes(item.room))
+      .sort((left, right) => right.timestamp - left.timestamp);
+  };
+  const listener = loadWrapper(f.native);
+  const messages = host(messagesSource, 'useKakaoMessages', listener, f.foreground);
+  const tracked = host(roomsSource, 'useTrackedRooms', listener, f.foreground);
+  await settle();
+  assert.deepEqual(plain(messages.snapshot().messages), []);
+  assert.equal(f.state.reads, 0);
+
+  // Registration alone must request already-stored history, even with no message event.
+  assert.equal(await tracked.snapshot().addRoom('Observed'), true);
+  await settle();
+  assert.deepEqual(plain(messages.snapshot().messages.map((item) => item.messageId)), [1]);
+  assert.equal(f.state.reads, 1);
+
+  assert.equal(await tracked.snapshot().removeRoom('Observed'), true);
+  assert.deepEqual(plain(messages.snapshot().messages), []);
+  const whileHidden = message(3, 'Observed');
+  stored.push(whileHidden);
+  for (const callback of f.events) callback(whileHidden);
+  await settle();
+  assert.deepEqual(plain(messages.snapshot().messages), []);
+  assert.equal(f.state.reads, 1);
+
+  assert.equal(await tracked.snapshot().addRoom('Observed'), true);
+  await settle();
+  assert.deepEqual(plain(messages.snapshot().messages.map((item) => item.messageId)), [3, 1]);
+  assert.equal(f.state.reads, 2);
+  assert.equal(stored.length, 3);
+  messages.unmount();
+  tracked.unmount();
+  assert.equal(f.events.size, 0);
+  assert.equal(f.foreground.size, 0);
 });
 
 for (const staleOperation of ['refresh', 'loadMore']) {
@@ -219,4 +264,148 @@ test('older APK hooks show a rebuild error and never display unfiltered messages
   assert.equal(messageReads, 0);
   messages.unmount();
   rooms.unmount();
+});
+
+function discoveryFixture(initialRooms = []) {
+  const state = { rooms: [...initialRooms], reads: 0 };
+  const events = new Set();
+  const foreground = new Set();
+  const native = {
+    async getDiscoveredRooms() { state.reads++; return [...state.rooms]; },
+    addListener(name, callback) {
+      assert.equal(name, 'onDiscoveredRoomsChanged');
+      events.add(callback);
+      return { remove() { events.delete(callback); } };
+    },
+  };
+  return { state, events, foreground, native };
+}
+
+test('discovered rooms load without tracking any room and refresh after a native discovery event', async () => {
+  const f = discoveryFixture(['First']);
+  const listener = loadWrapper(f.native);
+  const hook = host(discoveredRoomsSource, 'useDiscoveredRooms', listener, f.foreground);
+  await settle();
+  assert.equal(hook.snapshot().supported, true);
+  assert.deepEqual(plain(hook.snapshot().rooms), ['First']);
+  assert.equal(hook.snapshot().loading, false);
+  assert.equal(hook.snapshot().error, null);
+  f.state.rooms.push('Second');
+  for (const callback of f.events) callback({});
+  await settle();
+  assert.deepEqual(plain(hook.snapshot().rooms), ['First', 'Second']);
+  assert.equal(f.state.reads, 2);
+  hook.unmount();
+  assert.equal(f.events.size, 0);
+  assert.equal(f.foreground.size, 0);
+});
+
+test('returning to the foreground recovers room names discovered without a JS event', async () => {
+  const f = discoveryFixture();
+  const hook = host(discoveredRoomsSource, 'useDiscoveredRooms', loadWrapper(f.native), f.foreground);
+  await settle();
+  f.state.rooms = ['While away'];
+  for (const callback of f.foreground) callback('background');
+  await settle();
+  assert.equal(f.state.reads, 1);
+  assert.deepEqual(plain(hook.snapshot().rooms), []);
+  for (const callback of f.foreground) callback('active');
+  await settle();
+  assert.deepEqual(plain(hook.snapshot().rooms), ['While away']);
+  assert.equal(f.state.reads, 2);
+  hook.unmount();
+});
+
+for (const staleResult of ['success', 'failure']) {
+  test(`new discovery reads supersede a delayed ${staleResult} without losing the latest list`, async () => {
+    const f = discoveryFixture(['Initial']);
+    let finishOld;
+    let delayNextRead = false;
+    f.native.getDiscoveredRooms = async () => {
+      if (delayNextRead) {
+        delayNextRead = false;
+        return new Promise((resolve, reject) => {
+          finishOld = () => staleResult === 'success' ? resolve(['Stale']) : reject(new Error('Stale error'));
+        });
+      }
+      return [...f.state.rooms];
+    };
+    const hook = host(discoveredRoomsSource, 'useDiscoveredRooms', loadWrapper(f.native), f.foreground);
+    await settle();
+    delayNextRead = true;
+    const old = hook.snapshot().refresh();
+    await settle();
+    assert.equal(typeof finishOld, 'function');
+    f.state.rooms = ['Initial', 'Latest'];
+    for (const callback of f.events) callback({});
+    await settle();
+    assert.deepEqual(plain(hook.snapshot().rooms), ['Initial', 'Latest']);
+    finishOld();
+    await old;
+    const state = hook.snapshot();
+    assert.deepEqual(plain(state.rooms), ['Initial', 'Latest']);
+    assert.equal(state.error, null);
+    assert.equal(state.loading, false);
+    hook.unmount();
+  });
+}
+
+test('failed discovery refresh retains known names, reports the failure, and allows retry', async () => {
+  const f = discoveryFixture(['Known']);
+  let fail = false;
+  f.native.getDiscoveredRooms = async () => {
+    if (fail) throw new Error('발견한 방 조회 실패');
+    return [...f.state.rooms];
+  };
+  const hook = host(discoveredRoomsSource, 'useDiscoveredRooms', loadWrapper(f.native), f.foreground);
+  await settle();
+  fail = true;
+  await hook.snapshot().refresh();
+  assert.deepEqual(plain(hook.snapshot().rooms), ['Known']);
+  assert.match(hook.snapshot().error, /발견한 방 조회 실패/);
+  assert.equal(hook.snapshot().loading, false);
+  fail = false;
+  f.state.rooms.push('Recovered');
+  await hook.snapshot().refresh();
+  assert.deepEqual(plain(hook.snapshot().rooms), ['Known', 'Recovered']);
+  assert.equal(hook.snapshot().error, null);
+  hook.unmount();
+});
+
+for (const lateResult of ['success', 'failure']) {
+  test(`discovery teardown ignores a pending ${lateResult} and removes subscriptions`, async () => {
+    const f = discoveryFixture();
+    let finishRead;
+    f.native.getDiscoveredRooms = () => new Promise((resolve, reject) => {
+      finishRead = () => lateResult === 'success' ? resolve(['Too late']) : reject(new Error('Too late'));
+    });
+    const hook = host(discoveredRoomsSource, 'useDiscoveredRooms', loadWrapper(f.native), f.foreground);
+    await settle();
+    assert.equal(typeof finishRead, 'function');
+    hook.unmount();
+    assert.equal(f.events.size, 0);
+    assert.equal(f.foreground.size, 0);
+    const writes = hook.stateWrites();
+    finishRead();
+    await settle();
+    assert.equal(hook.stateWrites(), writes);
+  });
+}
+
+test('an APK without room discovery can still load and edit manually registered rooms', async () => {
+  const f = fixture(['Existing']);
+  const listener = loadWrapper(f.native);
+  const discovered = host(discoveredRoomsSource, 'useDiscoveredRooms', listener, f.foreground);
+  const tracked = host(roomsSource, 'useTrackedRooms', listener, f.foreground);
+  await settle();
+  assert.equal(discovered.snapshot().supported, false);
+  assert.equal(discovered.snapshot().loading, false);
+  assert.deepEqual(plain(discovered.snapshot().rooms), []);
+  assert.equal(tracked.snapshot().supported, true);
+  assert.equal(await tracked.snapshot().addRoom('Typed room'), true);
+  assert.deepEqual(plain(tracked.snapshot().rooms), ['Existing', 'Typed room']);
+  assert.equal(tracked.snapshot().error, null);
+  discovered.unmount();
+  tracked.unmount();
+  assert.equal(f.foreground.size, 0);
 });

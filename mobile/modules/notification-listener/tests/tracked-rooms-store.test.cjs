@@ -11,6 +11,7 @@ const tableDefinitions = [...source.matchAll(/"""([\s\S]*?)"""/g)].map((match) =
 const rawTable = tableDefinitions.find((sql) => sql.includes('CREATE TABLE notifications'));
 const messageTable = tableDefinitions.find((sql) => sql.includes('CREATE TABLE IF NOT EXISTS kakao_messages'));
 const trackedTable = source.match(/db\.execSQL\("(CREATE TABLE IF NOT EXISTS tracked_rooms[^"\n]*)"\)/)[1];
+const discoveredTable = source.match(/db\.execSQL\("(CREATE TABLE IF NOT EXISTS discovered_rooms[^"\n]*)"\)/)[1];
 const addRoomColumn = source.match(/db\.execSQL\("(ALTER TABLE kakao_messages[^"\n]*)"\)/)[1];
 const addRoomSourceColumn = source.match(/db\.execSQL\("(ALTER TABLE kakao_messages ADD COLUMN room_source[^"\n]*)"\)/)[1];
 const roomIndex = source.match(/"(CREATE INDEX IF NOT EXISTS kakao_messages_room_timestamp_id[^"\n]*)"\s*\+\s*"([^"\n]*)"/).slice(1).join('');
@@ -27,6 +28,7 @@ function createDatabase() {
   db.exec(rawTable);
   db.exec(messageTable);
   db.exec(trackedTable);
+  db.exec(discoveredTable);
   db.exec(roomIndex);
   return db;
 }
@@ -83,6 +85,59 @@ function migrateVerifiedRooms(db) {
       .run(payload.room, payload.roomSource, JSON.stringify(payload), row.message_id);
   }
 }
+
+test('v5 discovery migration preserves existing history and tracking settings', () => {
+  const db = createDatabase();
+  try {
+    db.exec('DROP TABLE discovered_rooms');
+    register(db, ['공지방']);
+    const id = insertMessage(db, '공지방', 100);
+    db.prepare('INSERT INTO notifications(notification_key,post_time,fingerprint,payload,received_at) VALUES (?,?,?,?,?)')
+      .run('existing', 100, 'raw-existing', '{"text":"existing body"}', 200);
+    const messages = db.prepare('SELECT * FROM kakao_messages').all();
+    const notifications = db.prepare('SELECT * FROM notifications').all();
+    db.exec('BEGIN');
+    db.exec(discoveredTable);
+    db.exec('COMMIT');
+    assert.deepEqual(db.prepare('SELECT * FROM discovered_rooms').all(), []);
+    assert.deepEqual(db.prepare('SELECT * FROM kakao_messages').all(), messages);
+    assert.deepEqual(db.prepare('SELECT * FROM notifications').all(), notifications);
+    assert.deepEqual(page(db, 10).map((row) => row.id), [id]);
+    assert.deepEqual(db.prepare('SELECT name FROM tracked_rooms').all().map((row) => row.name), ['공지방']);
+  } finally {
+    db.close();
+  }
+});
+
+test('discovery stores only unique names without enrolling rooms or raw notification contents', () => {
+  const db = createDatabase();
+  try {
+    assert.deepEqual(db.prepare('PRAGMA table_info(discovered_rooms)').all().map((column) => column.name), ['name']);
+    const discover = db.prepare('INSERT OR IGNORE INTO discovered_rooms(name) VALUES (?)');
+    assert.equal(discover.run('공지방').changes, 1);
+    assert.equal(discover.run('공지방').changes, 0);
+    assert.equal(discover.run('Team').changes, 1);
+    assert.equal(discover.run('team').changes, 1);
+    assert.deepEqual(db.prepare('SELECT name FROM discovered_rooms ORDER BY name').all().map((row) => row.name),
+      ['Team', 'team', '공지방']);
+    for (const table of ['tracked_rooms', 'notifications', 'kakao_messages']) {
+      assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0);
+    }
+    const beforeRegistration = insertMessage(db, '공지방', 100);
+    assert.deepEqual(page(db, 10), []);
+    register(db, ['공지방']);
+    assert.deepEqual(page(db, 10).map((row) => row.id), [beforeRegistration]);
+    register(db, []);
+    const afterRemoval = insertMessage(db, '공지방', 200);
+    assert.deepEqual(page(db, 10), []);
+    register(db, ['공지방']);
+    assert.deepEqual(page(db, 10).map((row) => row.id), [afterRemoval, beforeRegistration]);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM notifications').get().count, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM discovered_rooms').get().count, 3);
+  } finally {
+    db.close();
+  }
+});
 
 test('v2 migration preserves raw/message history, IDs, and fingerprints', () => {
   const db = new DatabaseSync(':memory:');

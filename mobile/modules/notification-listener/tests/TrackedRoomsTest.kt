@@ -17,9 +17,23 @@ fun main() {
     }
   }
 
-  test("empty registration collects no room") {
+  test("empty registration displays no room") {
     check(!TrackedRooms.matches("공지방", emptySet(), "conversationTitle"))
     check(TrackedRooms.normalize(emptyList()).isEmpty())
+  }
+  test("verified rooms remain eligible for storage before registration and after removal") {
+    for (source in listOf("conversationShortcut", "conversationTitle", "hiddenConversationTitle")) {
+      check(TrackedRooms.isVerifiedRoom("공지방", source))
+      check(!TrackedRooms.matches("공지방", emptySet(), source))
+      check(TrackedRooms.matches("공지방", setOf("공지방"), source))
+      check(TrackedRooms.isVerifiedRoom("공지방", source))
+    }
+    for (source in listOf(null, "unknown", "title", "sender", "subText", "summaryText")) {
+      check(!TrackedRooms.isVerifiedRoom("Alice", source))
+    }
+    for (room in listOf(null, "", " \n")) {
+      check(!TrackedRooms.isVerifiedRoom(room, "conversationTitle"))
+    }
   }
   test("registration trims names and drops empty or duplicate entries") {
     check(TrackedRooms.normalize(listOf("  공지방 ", "", "\t\n", "공지방")) == listOf("공지방"))

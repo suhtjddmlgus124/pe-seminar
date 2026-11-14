@@ -10,8 +10,14 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 
+internal data class NotificationCollectionResult(
+  val notification: Map<String, Any?>?,
+  val messages: List<Map<String, Any?>>,
+  val discoveredRoomsChanged: Boolean
+)
+
 internal class NotificationStore private constructor(context: Context) :
-  SQLiteOpenHelper(context.applicationContext, "collected-notifications.db", null, 4) {
+  SQLiteOpenHelper(context.applicationContext, "collected-notifications.db", null, 5) {
   companion object {
     private const val VERIFIED_ROOM_SELECTION =
       "messages.room <> '' AND messages.room_source IN ('conversationShortcut', 'conversationTitle', 'hiddenConversationTitle')"
@@ -45,6 +51,7 @@ internal class NotificationStore private constructor(context: Context) :
     )
     createKakaoMessagesTable(db)
     createTrackedRoomsTable(db)
+    createDiscoveredRoomsTable(db)
     createKakaoMessagesRoomIndex(db)
   }
 
@@ -64,6 +71,9 @@ internal class NotificationStore private constructor(context: Context) :
         db.execSQL("ALTER TABLE kakao_messages ADD COLUMN room_source TEXT NOT NULL DEFAULT 'unknown'")
       }
       migrateVerifiedMessageRooms(db)
+    }
+    if (oldVersion < 5) {
+      createDiscoveredRoomsTable(db)
     }
     if (oldVersion < 2) {
       backfillKakaoMessages(db)
@@ -91,6 +101,11 @@ internal class NotificationStore private constructor(context: Context) :
 
   private fun createTrackedRoomsTable(db: SQLiteDatabase) {
     db.execSQL("CREATE TABLE IF NOT EXISTS tracked_rooms (name TEXT PRIMARY KEY NOT NULL)")
+  }
+
+  private fun createDiscoveredRoomsTable(db: SQLiteDatabase) {
+    // Discovery keeps only the name, never the sender, body, or raw notification.
+    db.execSQL("CREATE TABLE IF NOT EXISTS discovered_rooms (name TEXT PRIMARY KEY NOT NULL)")
   }
 
   private fun createKakaoMessagesRoomIndex(db: SQLiteDatabase) {
@@ -126,6 +141,22 @@ internal class NotificationStore private constructor(context: Context) :
   }
 
   fun getTrackedRooms(): List<String> = getTrackedRooms(readableDatabase)
+
+  fun getDiscoveredRooms(): List<String> = readableDatabase.query(
+    "discovered_rooms", arrayOf("name"), null, null, null, null, null
+  ).use { cursor ->
+    TrackedRooms.normalize(buildList {
+      while (cursor.moveToNext()) add(cursor.getString(0))
+    })
+  }
+
+  private fun discoverRoom(db: SQLiteDatabase, payload: Map<String, Any?>): Boolean {
+    val room = KakaoMessageParser.resolveRoom(payload)?.first ?: return false
+    return db.insertWithOnConflict(
+      "discovered_rooms", null, ContentValues().apply { put("name", room) },
+      SQLiteDatabase.CONFLICT_IGNORE
+    ) != -1L
+  }
 
   private fun getTrackedRooms(db: SQLiteDatabase): List<String> = db.query(
     "tracked_rooms", arrayOf("name"), null, null, null, null, null
@@ -175,22 +206,24 @@ internal class NotificationStore private constructor(context: Context) :
   fun insertNotificationWithMessages(
     payload: Map<String, Any?>,
     receivedAt: Long
-  ): Pair<Map<String, Any?>?, List<Map<String, Any?>>> {
+  ): NotificationCollectionResult {
     val db = writableDatabase
     db.beginTransaction()
     try {
+      val discoveredRoomsChanged = discoverRoom(db, payload)
       val rooms = getTrackedRooms(db).toSet()
-      val matched = if (rooms.isEmpty()) emptyList() else KakaoMessageParser.parse(payload)
-        .filter { TrackedRooms.matches(it.room, rooms, it.roomSource) }
-      if (matched.isEmpty()) {
-        db.setTransactionSuccessful()
-        return null to emptyList()
-      }
-      val notification = insert(payload, receivedAt)
+      val parsed = KakaoMessageParser.parse(payload)
+        .filter { TrackedRooms.isVerifiedRoom(it.room, it.roomSource) }
+      // Keep verified messages before registration, but raw diagnostic payloads only for tracked rooms.
+      val notification = if (parsed.any { TrackedRooms.matches(it.room, rooms, it.roomSource) }) {
+        insert(payload, receivedAt)
+      } else null
       // Parse duplicate raw notifications too, so missing derived rows can be restored.
-      val messages = insertKakaoMessages(db, matched)
+      val messages = insertKakaoMessages(db, parsed).filter {
+        TrackedRooms.matches(it["room"] as String, rooms, it["roomSource"] as? String)
+      }
       db.setTransactionSuccessful()
-      return notification to messages
+      return NotificationCollectionResult(notification, messages, discoveredRoomsChanged)
     } finally {
       db.endTransaction()
     }
@@ -233,9 +266,8 @@ internal class NotificationStore private constructor(context: Context) :
     db: SQLiteDatabase,
     messages: List<ParsedKakaoMessage>
   ): List<Map<String, Any?>> = buildList {
-    val rooms = getTrackedRooms(db).toSet()
     for (message in messages) {
-      if (!TrackedRooms.matches(message.room, rooms, message.roomSource)) continue
+      if (!TrackedRooms.isVerifiedRoom(message.room, message.roomSource)) continue
       // Include message time so identical text sent later remains a separate message.
       // Preserve the count of indistinguishable messages visible in one notification batch.
       val identity = JSONArray(
@@ -261,8 +293,7 @@ internal class NotificationStore private constructor(context: Context) :
         add(payload + mapOf("messageId" to id))
       } else {
         upgradeKakaoMessageMetadata(db, fingerprint, payload)?.let { updated ->
-          val room = updated["room"] as? String
-          if (room != null && TrackedRooms.matches(room, rooms, updated["roomSource"] as? String)) {
+          if (TrackedRooms.isVerifiedRoom(updated["room"] as? String, updated["roomSource"] as? String)) {
             add(updated)
           }
         }
@@ -364,7 +395,6 @@ internal class NotificationStore private constructor(context: Context) :
   }
 
   private fun backfillKakaoMessages(db: SQLiteDatabase) {
-    if (getTrackedRooms(db).isEmpty()) return
     db.query(
       "notifications", arrayOf("collection_id", "payload", "received_at"),
       null, null, null, null, "collection_id ASC"

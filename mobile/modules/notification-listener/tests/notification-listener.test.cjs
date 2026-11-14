@@ -28,19 +28,76 @@ test('unsupported platforms and Expo Go cannot invoke native collection APIs', a
   for (const platform of ['android', 'web', 'ios']) {
     const listener = load(null, platform);
     assert.equal(listener.isAvailable(), false);
+    assert.equal(listener.isDiscoveredRoomsSupported(), false);
     assert.equal(listener.isPermissionGranted(), false);
     await assert.rejects(listener.getCollectedNotifications(), /Android build/);
     await assert.rejects(listener.getKakaoMessages(), /Android build/);
     await assert.rejects(listener.clearKakaoMessages(), /Android build/);
     await assert.rejects(listener.clearCollectedNotifications(), /Android build/);
     await assert.rejects(listener.getTrackedRooms(), /Android build/);
+    await assert.rejects(listener.getDiscoveredRooms(), /Android build/);
     await assert.rejects(listener.setTrackedRooms([]), /Android build/);
     await assert.rejects(listener.openSettings(), /Android build/);
     assert.throws(() => listener.addNotificationListener(() => {}), /Android build/);
     assert.throws(() => listener.addKakaoMessageListener(() => {}), /Android build/);
+    assert.throws(() => listener.addDiscoveredRoomsListener(() => {}), /Android build/);
   }
   assert.equal(load({}, 'ios').isAvailable(), false);
   assert.equal(load({}, 'web').isAvailable(), false);
+});
+
+test('discovery requires a compatible APK without disabling existing tracking APIs', async () => {
+  const listener = load({
+    async getTrackedRooms() { return ['Saved']; },
+    async setTrackedRooms(rooms) { return rooms; },
+  });
+  assert.equal(listener.isTrackedRoomsSupported(), true);
+  assert.equal(listener.isDiscoveredRoomsSupported(), false);
+  assert.deepEqual(Array.from(await listener.getTrackedRooms()), ['Saved']);
+  await assert.rejects(listener.getDiscoveredRooms(), /발견한 채팅방.*새 Android 개발 빌드/);
+  assert.throws(() => listener.addDiscoveredRoomsListener(() => {}), /새 Android 개발 빌드/);
+  assert.throws(() => listener.addListener('onDiscoveredRoomsChanged', () => {}), /새 Android 개발 빌드/);
+
+  const unsafe = load({ roomResolutionVersion: 0, async getDiscoveredRooms() { return ['Sender']; } });
+  assert.equal(unsafe.isDiscoveredRoomsSupported(), false);
+  await assert.rejects(unsafe.getDiscoveredRooms(), /채팅방 이름 추출/);
+});
+
+test('discovered names are normalized without changing tracked rooms or reading message bodies', async () => {
+  const listener = load({
+    isPermissionGranted: () => false,
+    async getDiscoveredRooms() { return [' Team B ', '', 'Team A', 'Team B', 'team a']; },
+    async getKakaoMessages() { assert.fail('Discovery must not read messages'); },
+    async setTrackedRooms() { assert.fail('Discovery must not register rooms'); },
+  });
+  assert.equal(listener.isDiscoveredRoomsSupported(), true);
+  assert.deepEqual(Array.from(await listener.getDiscoveredRooms()), ['Team A', 'Team B', 'team a']);
+});
+
+test('discovery events can refresh names independently of message events and unsubscribe', async () => {
+  const callbacks = new Set();
+  const listener = load({
+    async getDiscoveredRooms() { return []; },
+    addListener(name, callback) {
+      assert.equal(name, 'onDiscoveredRoomsChanged');
+      callbacks.add(callback);
+      return { remove() { callbacks.delete(callback); } };
+    },
+  });
+  let updates = 0;
+  const first = listener.addDiscoveredRoomsListener(() => { updates++; });
+  const second = listener.addListener('onDiscoveredRoomsChanged', () => { updates++; });
+  for (const callback of callbacks) callback({});
+  assert.equal(updates, 2);
+  first.remove();
+  second.remove();
+  assert.equal(callbacks.size, 0);
+});
+
+test('discovery read failures remain distinguishable from an empty list', async () => {
+  const failure = new Error('Discovered rooms unavailable');
+  const listener = load({ async getDiscoveredRooms() { throw failure; } });
+  await assert.rejects(listener.getDiscoveredRooms(), (error) => error === failure);
 });
 
 test('tracking settings require both native APIs and give older APKs a Korean rebuild instruction', async () => {
