@@ -136,6 +136,39 @@ class NotificationListenerModule : Module() {
       }
     }
 
+    AsyncFunction("getKakaoMessage") { messageId: Long, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getKakaoMessage(messageId))
+        } catch (error: Exception) {
+          promise.reject("ERR_KAKAO_MESSAGE_READ", "메시지를 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("getFavoriteMessages") { limit: Int, beforeId: Long?, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getFavoriteMessages(limit, beforeId))
+        } catch (error: Exception) {
+          promise.reject("ERR_FAVORITE_MESSAGES_READ", "즐겨찾기를 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("setMessageFavorite") { messageId: Long, favorite: Boolean, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).setMessageFavorite(messageId, favorite))
+        } catch (error: Exception) {
+          promise.reject("ERR_MESSAGE_FAVORITE_WRITE", "즐겨찾기를 변경하지 못했습니다.", error)
+        }
+      }
+    }
+
     OnStartObserving("onNotificationPosted") {
       NotificationListenerService.observers.add(observer)
     }

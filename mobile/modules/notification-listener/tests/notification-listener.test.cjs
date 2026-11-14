@@ -29,6 +29,7 @@ test('unsupported platforms and Expo Go cannot invoke native collection APIs', a
     const listener = load(null, platform);
     assert.equal(listener.isAvailable(), false);
     assert.equal(listener.isDiscoveredRoomsSupported(), false);
+    assert.equal(listener.isFavoritesSupported(), false);
     assert.equal(listener.isPermissionGranted(), false);
     await assert.rejects(listener.getCollectedNotifications(), /Android build/);
     await assert.rejects(listener.getKakaoMessages(), /Android build/);
@@ -36,6 +37,9 @@ test('unsupported platforms and Expo Go cannot invoke native collection APIs', a
     await assert.rejects(listener.clearCollectedNotifications(), /Android build/);
     await assert.rejects(listener.getTrackedRooms(), /Android build/);
     await assert.rejects(listener.getDiscoveredRooms(), /Android build/);
+    await assert.rejects(listener.getFavoriteMessages(), /Android build/);
+    await assert.rejects(listener.getKakaoMessage(1), /Android build/);
+    await assert.rejects(listener.setMessageFavorite(1, true), /Android build/);
     await assert.rejects(listener.setTrackedRooms([]), /Android build/);
     await assert.rejects(listener.openSettings(), /Android build/);
     assert.throws(() => listener.addNotificationListener(() => {}), /Android build/);
@@ -44,6 +48,111 @@ test('unsupported platforms and Expo Go cannot invoke native collection APIs', a
   }
   assert.equal(load({}, 'ios').isAvailable(), false);
   assert.equal(load({}, 'web').isAvailable(), false);
+});
+
+function favoriteNative(overrides = {}) {
+  return {
+    async getKakaoMessages() { return []; },
+    async getKakaoMessage() { return null; },
+    async getFavoriteMessages() { return []; },
+    async setMessageFavorite(messageId, isFavorite) { return { messageId, isFavorite }; },
+    ...overrides,
+  };
+}
+
+test('favorites require the complete native API while older APK message reading stays available', async () => {
+  for (const missing of ['getKakaoMessage', 'getFavoriteMessages', 'setMessageFavorite']) {
+    const native = favoriteNative({ [missing]: undefined, async getKakaoMessages() { return []; } });
+    const listener = load(native);
+    assert.equal(listener.isFavoritesSupported(), false);
+    assert.deepEqual(Array.from(await listener.getKakaoMessages()), []);
+    await assert.rejects(listener.getKakaoMessage(1), /새 Android 개발 빌드/);
+    await assert.rejects(listener.getFavoriteMessages(), /새 Android 개발 빌드/);
+    await assert.rejects(listener.setMessageFavorite(1, true), /새 Android 개발 빌드/);
+  }
+  const unsafe = load(favoriteNative({ roomResolutionVersion: 0 }));
+  assert.equal(unsafe.isFavoritesSupported(), false);
+  await assert.rejects(unsafe.getFavoriteMessages(), /채팅방 이름 추출/);
+});
+
+test('favorite history uses native pagination and detail preserves missing and saved records', async () => {
+  const saved = { messageId: 21, room: 'Saved room', msg: 'Saved body', isFavorite: true };
+  const calls = [];
+  const listener = load(favoriteNative({
+    async getKakaoMessage(id) { return id === saved.messageId ? saved : null; },
+    async getFavoriteMessages(...args) { calls.push(args); return [saved]; },
+  }));
+  assert.equal(listener.isFavoritesSupported(), true);
+  assert.deepEqual(Array.from(await listener.getFavoriteMessages()), [saved]);
+  assert.deepEqual(Array.from(await listener.getFavoriteMessages({ limit: 7, beforeId: 21 })), [saved]);
+  assert.deepEqual(calls, [[100, null], [7, 21]]);
+  assert.deepEqual(await listener.getKakaoMessage(21), saved);
+  assert.equal(await listener.getKakaoMessage(22), null);
+});
+
+test('unsafe favorite IDs, booleans, and pagination never reach the native store', async () => {
+  let calls = 0;
+  const listener = load(favoriteNative({
+    async getKakaoMessage() { calls++; },
+    async getFavoriteMessages() { calls++; },
+    async setMessageFavorite() { calls++; },
+  }));
+  for (const id of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(listener.getKakaoMessage(id));
+    await assert.rejects(listener.setMessageFavorite(id, true));
+  }
+  for (const isFavorite of [undefined, null, 0, 1, 'true']) {
+    await assert.rejects(listener.setMessageFavorite(1, isFavorite));
+  }
+  for (const options of [{ limit: 0 }, { limit: 501 }, { beforeId: 0 }, { beforeId: 1.5 }]) {
+    await assert.rejects(listener.getFavoriteMessages(options));
+  }
+  assert.equal(calls, 0);
+});
+
+test('favorite changes publish only committed records and subscriber errors cannot fail a saved write', async () => {
+  let confirm;
+  const listener = load(favoriteNative({
+    setMessageFavorite(messageId, isFavorite) {
+      return new Promise((resolve) => { confirm = () => resolve({ messageId, isFavorite, room: 'Saved' }); });
+    },
+  }));
+  const changes = [];
+  const bad = listener.addFavoriteMessagesListener(() => { throw new Error('Broken screen'); });
+  const good = listener.addFavoriteMessagesListener((record) => changes.push(record));
+  const save = listener.setMessageFavorite(9, true);
+  await new Promise(setImmediate);
+  assert.deepEqual(changes, []);
+  confirm();
+  const saved = await save;
+  assert.equal(saved.isFavorite, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(changes)), [saved]);
+  bad.remove();
+  good.remove();
+  const remove = listener.setMessageFavorite(9, false);
+  await new Promise(setImmediate);
+  confirm();
+  await remove;
+  assert.equal(changes.length, 1);
+});
+
+test('failed favorite changes emit no update and a later edit can still succeed', async () => {
+  const failure = new Error('Favorites database full');
+  let writes = 0;
+  const listener = load(favoriteNative({
+    async setMessageFavorite(messageId, isFavorite) {
+      if (++writes === 1) throw failure;
+      return { messageId, isFavorite };
+    },
+  }));
+  const changes = [];
+  listener.addFavoriteMessagesListener((record) => changes.push(record));
+  const first = listener.setMessageFavorite(9, true);
+  const next = listener.setMessageFavorite(10, true);
+  await assert.rejects(first, (error) => error === failure);
+  const saved = await next;
+  assert.equal(saved.messageId, 10);
+  assert.deepEqual(JSON.parse(JSON.stringify(changes)), [saved]);
 });
 
 test('discovery requires a compatible APK without disabling existing tracking APIs', async () => {

@@ -30,11 +30,13 @@ function loadWrapper(native) {
 }
 
 // A minimal hook host exercises asynchronous lifecycle behavior without a new renderer dependency.
-function host(source, exportName, listener, foregroundListeners) {
+function host(source, exportName, listener, foregroundListeners, ...initialArguments) {
   const slots = [];
   let index = 0;
   let effects = [];
   let stateWrites = 0;
+  let hookArguments = initialArguments;
+  const modules = new Map();
   const same = (left, right) => left && right && left.length === right.length
     && left.every((item, position) => Object.is(item, right[position]));
   const react = {
@@ -79,15 +81,24 @@ function host(source, exportName, listener, foregroundListeners) {
         },
       } };
       if (name === '@/modules/notification-listener') return { __esModule: true, default: listener };
+      if (name === '@/hooks/use-message-favorite-actions' || name === './use-message-favorite-actions') {
+        if (!modules.has(name)) {
+          const helper = { ...context, exports: {} };
+          vm.runInNewContext(compile('../../../src/hooks/use-message-favorite-actions.ts'), helper);
+          modules.set(name, helper.exports);
+        }
+        return modules.get(name);
+      }
       throw new Error(`Unexpected dependency: ${name}`);
     },
   };
   vm.runInNewContext(source, context);
   const hook = context.exports[exportName];
   const result = {
-    snapshot() {
+    snapshot(...nextArguments) {
+      if (nextArguments.length > 0) hookArguments = nextArguments;
       index = 0;
-      const value = hook();
+      const value = hook(...hookArguments);
       const pending = effects;
       effects = [];
       for (const effect of pending) effect();
@@ -407,5 +418,296 @@ test('an APK without room discovery can still load and edit manually registered 
   assert.equal(tracked.snapshot().error, null);
   discovered.unmount();
   tracked.unmount();
+  assert.equal(f.foreground.size, 0);
+});
+
+function favoriteFixture(initialMessages = [
+  { ...message(300, 'Tracked'), isFavorite: false },
+  { ...message(200, 'Untracked'), isFavorite: true },
+  { ...message(100, 'Tracked'), isFavorite: true },
+]) {
+  const f = fixture(['Tracked']);
+  f.state.messages = initialMessages.map((item) => ({ ...item }));
+  const ordered = (items, limit, beforeId) => items
+    .filter((item) => beforeId === null || item.messageId < beforeId)
+    .sort((left, right) => right.timestamp - left.timestamp || right.messageId - left.messageId)
+    .slice(0, limit).map((item) => ({ ...item }));
+  f.native.getKakaoMessages = async (limit = 100, beforeId = null) => ordered(
+    f.state.messages.filter((item) => f.state.rooms.includes(item.room)), limit, beforeId
+  );
+  f.native.getFavoriteMessages = async (limit = 100, beforeId = null) => ordered(
+    f.state.messages.filter((item) => item.isFavorite), limit, beforeId
+  );
+  f.native.getKakaoMessage = async (id) => {
+    const stored = f.state.messages.find((item) => item.messageId === id);
+    return stored && (stored.isFavorite || f.state.rooms.includes(stored.room)) ? { ...stored } : null;
+  };
+  f.native.setMessageFavorite = async (id, isFavorite) => {
+    const stored = f.state.messages.find((item) => item.messageId === id);
+    if (!stored || (!stored.isFavorite && !f.state.rooms.includes(stored.room))) throw new Error('Message unavailable');
+    stored.isFavorite = isFavorite;
+    return { ...stored };
+  };
+  return f;
+}
+
+function favoritesHost(listener, foreground) {
+  return host(compile('../../../src/hooks/use-favorite-messages.ts'), 'useFavoriteMessages', listener, foreground);
+}
+
+function detailHost(listener, foreground, id) {
+  return host(compile('../../../src/hooks/use-message-detail.ts'), 'useMessageDetail', listener, foreground, id);
+}
+
+test('saved messages load independently of tracked rooms and current notification permission', async () => {
+  const f = favoriteFixture();
+  f.state.rooms = [];
+  f.native.isPermissionGranted = () => false;
+  const listener = loadWrapper(f.native);
+  const favorites = favoritesHost(listener, f.foreground);
+  await settle();
+  const state = favorites.snapshot();
+  assert.equal(state.supported, true);
+  assert.equal(state.refreshing, false);
+  assert.deepEqual(plain(state.messages.map((item) => item.messageId)), [200, 100]);
+  favorites.unmount();
+  assert.equal(f.foreground.size, 0);
+});
+
+test('favorite actions synchronize home, saved list, and open detail after each committed change', async () => {
+  const f = favoriteFixture();
+  const listener = loadWrapper(f.native);
+  const home = host(messagesSource, 'useKakaoMessages', listener, f.foreground);
+  const favorites = favoritesHost(listener, f.foreground);
+  const detail = detailHost(listener, f.foreground, 300);
+  await settle();
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [200, 100]);
+  assert.equal(detail.snapshot().message.isFavorite, false);
+  assert.equal(await home.snapshot().toggleFavorite(home.snapshot().messages[0]), true);
+  await settle();
+  assert.equal(home.snapshot().messages[0].isFavorite, true);
+  assert.equal(detail.snapshot().message.isFavorite, true);
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [300, 200, 100]);
+  assert.equal(await detail.snapshot().toggleFavorite(), true);
+  await settle();
+  assert.equal(home.snapshot().messages[0].isFavorite, false);
+  assert.equal(detail.snapshot().message.isFavorite, false);
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [200, 100]);
+  home.unmount();
+  favorites.unmount();
+  detail.unmount();
+  assert.equal(f.foreground.size, 0);
+  assert.equal(f.events.size, 0);
+});
+
+test('a failed favorite write retains the saved state, clears pending, and can be retried', async () => {
+  const f = favoriteFixture();
+  const original = f.native.setMessageFavorite;
+  let fail = true;
+  f.native.setMessageFavorite = async (...args) => {
+    if (fail) throw new Error('즐겨찾기 저장 실패');
+    return original(...args);
+  };
+  const favorites = favoritesHost(loadWrapper(f.native), f.foreground);
+  await settle();
+  const saved = favorites.snapshot().messages[0];
+  assert.equal(await favorites.snapshot().toggleFavorite(saved), false);
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [200, 100]);
+  assert.equal(favorites.snapshot().favoritePendingIds.size, 0);
+  assert.match(favorites.snapshot().error, /즐겨찾기 저장 실패/);
+  fail = false;
+  assert.equal(await favorites.snapshot().toggleFavorite(saved), true);
+  await settle();
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [100]);
+  assert.equal(favorites.snapshot().error, null);
+  favorites.unmount();
+});
+
+test('a saved-message change supersedes an older list refresh that would resurrect a removed favorite', async () => {
+  const f = favoriteFixture();
+  const query = f.native.getFavoriteMessages;
+  let delay = false;
+  let finishOld;
+  f.native.getFavoriteMessages = async (...args) => {
+    const snapshot = await query(...args);
+    if (delay) {
+      delay = false;
+      return new Promise((resolve) => { finishOld = () => resolve(snapshot); });
+    }
+    return snapshot;
+  };
+  const listener = loadWrapper(f.native);
+  const favorites = favoritesHost(listener, f.foreground);
+  await settle();
+  delay = true;
+  const old = favorites.snapshot().refresh();
+  await settle();
+  await listener.setMessageFavorite(200, false);
+  await settle();
+  finishOld();
+  await old;
+  await settle();
+  assert.deepEqual(plain(favorites.snapshot().messages.map((item) => item.messageId)), [100]);
+  assert.equal(favorites.snapshot().refreshing, false);
+  favorites.unmount();
+});
+
+test('pagination responses from before an unfavorite cannot append that message again', async () => {
+  const f = favoriteFixture(Array.from({ length: 101 }, (_, index) => ({
+    ...message(300 - index, 'Untracked'), isFavorite: true,
+  })));
+  const query = f.native.getFavoriteMessages;
+  let finishPage;
+  f.native.getFavoriteMessages = async (limit, beforeId) => {
+    const page = await query(limit, beforeId);
+    if (beforeId !== null) return new Promise((resolve) => { finishPage = () => resolve(page); });
+    return page;
+  };
+  const listener = loadWrapper(f.native);
+  const favorites = favoritesHost(listener, f.foreground);
+  await settle();
+  assert.equal(favorites.snapshot().messages.length, 100);
+  assert.equal(favorites.snapshot().hasMore, true);
+  favorites.snapshot().loadMore();
+  await settle();
+  assert.equal(typeof finishPage, 'function');
+  await listener.setMessageFavorite(200, false);
+  await settle();
+  finishPage();
+  await settle();
+  assert.equal(favorites.snapshot().messages.some((item) => item.messageId === 200), false);
+  assert.equal(favorites.snapshot().loadingMore, false);
+  favorites.unmount();
+});
+
+test('detail ignores a delayed response for a card after selecting another card', async () => {
+  const f = favoriteFixture();
+  const query = f.native.getKakaoMessage;
+  let finishFirst;
+  f.native.getKakaoMessage = async (id) => {
+    const record = await query(id);
+    if (id === 300) return new Promise((resolve) => { finishFirst = () => resolve(record); });
+    return record;
+  };
+  const detail = detailHost(loadWrapper(f.native), f.foreground, 300);
+  await settle();
+  detail.snapshot(100);
+  await settle();
+  assert.equal(detail.snapshot().message.messageId, 100);
+  finishFirst();
+  await settle();
+  assert.equal(detail.snapshot().message.messageId, 100);
+  assert.equal(detail.snapshot().loading, false);
+  detail.unmount();
+});
+
+test('detail reports a missing message and refresh can recover after it becomes visible', async () => {
+  const f = favoriteFixture();
+  const detail = detailHost(loadWrapper(f.native), f.foreground, 400);
+  await settle();
+  assert.equal(detail.snapshot().message, null);
+  assert.equal(detail.snapshot().loading, false);
+  f.state.messages.push({ ...message(400, 'Tracked'), isFavorite: false });
+  await detail.snapshot().refresh();
+  assert.equal(detail.snapshot().message.messageId, 400);
+  detail.unmount();
+});
+
+test('favorite and detail hooks degrade gracefully on the previously installed APK', async () => {
+  const f = fixture(['Tracked']);
+  const listener = loadWrapper(f.native);
+  const home = host(messagesSource, 'useKakaoMessages', listener, f.foreground);
+  const favorites = favoritesHost(listener, f.foreground);
+  const detail = detailHost(listener, f.foreground, 500);
+  await settle();
+  assert.equal(home.snapshot().messages.length, 1);
+  assert.equal(home.snapshot().favoritesSupported, false);
+  assert.equal(favorites.snapshot().supported, false);
+  assert.equal(favorites.snapshot().refreshing, false);
+  assert.deepEqual(plain(favorites.snapshot().messages), []);
+  assert.equal(detail.snapshot().supported, false);
+  assert.equal(detail.snapshot().loading, false);
+  home.unmount();
+  favorites.unmount();
+  detail.unmount();
+  assert.equal(f.foreground.size, 0);
+});
+
+test('rapid favorite taps issue one write and a late save cannot update an unmounted list', async () => {
+  const f = favoriteFixture();
+  const save = f.native.setMessageFavorite;
+  let finishSave;
+  let writes = 0;
+  f.native.setMessageFavorite = (id, value) => {
+    writes++;
+    return new Promise((resolve) => { finishSave = () => resolve(save(id, value)); });
+  };
+  const favorites = favoritesHost(loadWrapper(f.native), f.foreground);
+  await settle();
+  const item = favorites.snapshot().messages[0];
+  const first = favorites.snapshot().toggleFavorite(item);
+  assert.equal(favorites.snapshot().favoritePendingIds.has(item.messageId), true);
+  assert.equal(await favorites.snapshot().toggleFavorite(item), false);
+  await settle();
+  assert.equal(writes, 1);
+  assert.equal(favorites.snapshot().messages[0].isFavorite, true);
+  favorites.unmount();
+  const writesBeforeCompletion = favorites.stateWrites();
+  finishSave();
+  assert.equal(await first, false);
+  await settle();
+  assert.equal(favorites.stateWrites(), writesBeforeCompletion);
+  assert.equal(f.state.messages.find((stored) => stored.messageId === item.messageId).isFavorite, false);
+  assert.equal(f.foreground.size, 0);
+});
+
+test('home keeps confirmed favorite state across delayed native events without revealing hidden rooms', async () => {
+  const f = favoriteFixture();
+  const listener = loadWrapper(f.native);
+  const home = host(messagesSource, 'useKakaoMessages', listener, f.foreground);
+  await settle();
+  const original = { ...home.snapshot().messages[0] };
+  await listener.setMessageFavorite(original.messageId, true);
+  for (const callback of f.events) {
+    callback(original);
+    callback({ ...message(200, 'Untracked'), isFavorite: true });
+  }
+  assert.equal(home.snapshot().messages.find((item) => item.messageId === original.messageId).isFavorite, true);
+  assert.equal(home.snapshot().messages.some((item) => item.room === 'Untracked'), false);
+  await listener.setMessageFavorite(200, false);
+  assert.equal(home.snapshot().messages.some((item) => item.room === 'Untracked'), false);
+  home.unmount();
+});
+
+test('unfavoriting a message from a removed room hides its open detail as well as the saved list', async () => {
+  const f = favoriteFixture();
+  const listener = loadWrapper(f.native);
+  const favorites = favoritesHost(listener, f.foreground);
+  const detail = detailHost(listener, f.foreground, 200);
+  await settle();
+  assert.equal(detail.snapshot().message.room, 'Untracked');
+  assert.equal(await detail.snapshot().toggleFavorite(), true);
+  await settle();
+  assert.equal(detail.snapshot().message, null);
+  assert.equal(detail.snapshot().loading, false);
+  assert.equal(favorites.snapshot().messages.some((item) => item.messageId === 200), false);
+  assert.equal(f.state.messages.some((item) => item.messageId === 200), true);
+  detail.unmount();
+  favorites.unmount();
+});
+
+test('a detail response completing after teardown does not write screen state', async () => {
+  const f = favoriteFixture();
+  let finishRead;
+  f.native.getKakaoMessage = () => new Promise((resolve) => {
+    finishRead = () => resolve({ ...message(300, 'Tracked'), isFavorite: false });
+  });
+  const detail = detailHost(loadWrapper(f.native), f.foreground, 300);
+  await settle();
+  detail.unmount();
+  const writes = detail.stateWrites();
+  finishRead();
+  await settle();
+  assert.equal(detail.stateWrites(), writes);
   assert.equal(f.foreground.size, 0);
 });

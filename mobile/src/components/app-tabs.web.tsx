@@ -21,14 +21,17 @@ type TabButtonProps = Omit<TabTriggerSlotProps, 'ref'> &
 export default function AppTabs() {
   return (
     <Tabs>
-      <TabSlot style={{ height: '100%', paddingTop: Spacing.six + Spacing.four }} />
+      <TabSlot style={{ height: '100%', paddingBottom: 84 }} />
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
+          <TabTrigger name="index" href="/" asChild>
             <TabButton>메시지</TabButton>
           </TabTrigger>
+          <TabTrigger name="favorites" href="./favorites" asChild>
+            <TabButton>즐겨찾기</TabButton>
+          </TabTrigger>
           <TabTrigger name="tracked-rooms" href="./tracked-rooms" asChild>
-            <TabButton>추적 채팅방</TabButton>
+            <TabButton>채팅방 추가</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>
@@ -42,7 +45,7 @@ export function TabButton({ children, isFocused, ...props }: TabButtonProps) {
       <ThemedView
         type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
         style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
+        <ThemedText type="small" numberOfLines={1} style={styles.tabLabel} themeColor={isFocused ? 'accent' : 'textSecondary'}>
           {children}
         </ThemedText>
       </ThemedView>
@@ -63,9 +66,9 @@ export function CustomTabList(props: TabListProps) {
 const styles = StyleSheet.create({
   tabListContainer: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     width: '100%',
-    padding: Spacing.three,
+    padding: Spacing.two,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -73,7 +76,7 @@ const styles = StyleSheet.create({
   innerContainer: {
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.two,
-    borderRadius: Spacing.five,
+    borderRadius: 20,
     flexDirection: 'row',
     alignItems: 'center',
     flexGrow: 1,
@@ -81,12 +84,13 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
   },
   tabButton: { flex: 1 },
+  tabLabel: { fontSize: 12, lineHeight: 18 },
   pressed: {
     opacity: 0.7,
   },
   tabButtonView: {
     paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
+    paddingHorizontal: Spacing.two,
     borderRadius: Spacing.three,
     minHeight: 44,
     alignItems: 'center',

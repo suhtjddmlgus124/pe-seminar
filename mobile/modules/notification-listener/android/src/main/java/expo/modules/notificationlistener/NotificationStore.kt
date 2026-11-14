@@ -17,12 +17,14 @@ internal data class NotificationCollectionResult(
 )
 
 internal class NotificationStore private constructor(context: Context) :
-  SQLiteOpenHelper(context.applicationContext, "collected-notifications.db", null, 5) {
+  SQLiteOpenHelper(context.applicationContext, "collected-notifications.db", null, 6) {
   companion object {
     private const val VERIFIED_ROOM_SELECTION =
       "messages.room <> '' AND messages.room_source IN ('conversationShortcut', 'conversationTitle', 'hiddenConversationTitle')"
     private const val KAKAO_CURSOR_SELECTION =
       "messages.timestamp < ? OR (messages.timestamp = ? AND messages.message_id < ?)"
+    private const val VISIBLE_MESSAGE_SELECTION =
+      "messages.is_favorite = 1 OR messages.room IN (SELECT name FROM tracked_rooms)"
 
     // Service writes and JS reads share a queue, including when no React runtime exists.
     val executor = Executors.newSingleThreadExecutor()
@@ -53,6 +55,7 @@ internal class NotificationStore private constructor(context: Context) :
     createTrackedRoomsTable(db)
     createDiscoveredRoomsTable(db)
     createKakaoMessagesRoomIndex(db)
+    createFavoriteMessagesIndex(db)
   }
 
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -75,6 +78,12 @@ internal class NotificationStore private constructor(context: Context) :
     if (oldVersion < 5) {
       createDiscoveredRoomsTable(db)
     }
+    if (oldVersion < 6) {
+      if (oldVersion >= 2) {
+        db.execSQL("ALTER TABLE kakao_messages ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+      }
+      createFavoriteMessagesIndex(db)
+    }
     if (oldVersion < 2) {
       backfillKakaoMessages(db)
     }
@@ -89,7 +98,8 @@ internal class NotificationStore private constructor(context: Context) :
         payload TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         room TEXT NOT NULL,
-        room_source TEXT NOT NULL
+        room_source TEXT NOT NULL,
+        is_favorite INTEGER NOT NULL DEFAULT 0
       )
       """.trimIndent()
     )
@@ -112,6 +122,13 @@ internal class NotificationStore private constructor(context: Context) :
     db.execSQL(
       "CREATE INDEX IF NOT EXISTS kakao_messages_room_timestamp_id " +
         "ON kakao_messages(room, timestamp DESC, message_id DESC)"
+    )
+  }
+
+  private fun createFavoriteMessagesIndex(db: SQLiteDatabase) {
+    db.execSQL(
+      "CREATE INDEX IF NOT EXISTS kakao_messages_favorite_timestamp_id " +
+        "ON kakao_messages(is_favorite, timestamp DESC, message_id DESC)"
     )
   }
 
@@ -290,7 +307,7 @@ internal class NotificationStore private constructor(context: Context) :
         "kakao_messages", null, values, SQLiteDatabase.CONFLICT_IGNORE
       )
       if (id != -1L) {
-        add(payload + mapOf("messageId" to id))
+        add(payload + mapOf("messageId" to id, "isFavorite" to false))
       } else {
         upgradeKakaoMessageMetadata(db, fingerprint, payload)?.let { updated ->
           if (TrackedRooms.isVerifiedRoom(updated["room"] as? String, updated["roomSource"] as? String)) {
@@ -306,7 +323,7 @@ internal class NotificationStore private constructor(context: Context) :
     fingerprint: String,
     candidate: Map<String, Any?>
   ): Map<String, Any?>? = db.query(
-    "kakao_messages", arrayOf("message_id", "payload"), "fingerprint = ?",
+    "kakao_messages", arrayOf("message_id", "payload", "is_favorite"), "fingerprint = ?",
     arrayOf(fingerprint), null, null, null, "1"
   ).use { cursor ->
     if (!cursor.moveToFirst()) return@use null
@@ -344,10 +361,24 @@ internal class NotificationStore private constructor(context: Context) :
     check(db.update("kakao_messages", values, "message_id = ?", arrayOf(id.toString())) == 1) {
       "Unable to update stored Kakao message metadata"
     }
-    stored + mapOf("messageId" to id)
+    stored + mapOf("messageId" to id, "isFavorite" to (cursor.getInt(2) == 1))
   }
 
-  fun getKakaoMessages(limit: Int, beforeId: Long?): List<Map<String, Any?>> {
+  fun getKakaoMessages(limit: Int, beforeId: Long?): List<Map<String, Any?>> = getMessagePage(
+    "kakao_messages AS messages INNER JOIN tracked_rooms AS tracked ON messages.room = tracked.name",
+    VERIFIED_ROOM_SELECTION, limit, beforeId
+  )
+
+  fun getFavoriteMessages(limit: Int, beforeId: Long?): List<Map<String, Any?>> = getMessagePage(
+    "kakao_messages AS messages", "$VERIFIED_ROOM_SELECTION AND messages.is_favorite = 1", limit, beforeId
+  )
+
+  private fun getMessagePage(
+    table: String,
+    baseSelection: String,
+    limit: Int,
+    beforeId: Long?
+  ): List<Map<String, Any?>> {
     require(limit in 1..500) { "limit must be between 1 and 500" }
     require(beforeId == null || beforeId > 0) { "beforeId must be positive" }
     val db = readableDatabase
@@ -357,14 +388,13 @@ internal class NotificationStore private constructor(context: Context) :
     ).use { cursor ->
       if (cursor.moveToFirst()) cursor.getLong(0) else return emptyList()
     }
-    val selection = if (beforeId == null) VERIFIED_ROOM_SELECTION else
-      "$VERIFIED_ROOM_SELECTION AND ($KAKAO_CURSOR_SELECTION)"
+    val selection = if (beforeId == null) baseSelection else
+      "$baseSelection AND ($KAKAO_CURSOR_SELECTION)"
     val args = beforeTimestamp?.let {
       arrayOf(it.toString(), it.toString(), beforeId.toString())
     }
     return db.query(
-      "kakao_messages AS messages INNER JOIN tracked_rooms AS tracked ON messages.room = tracked.name",
-      arrayOf("messages.message_id", "messages.payload"),
+      table, arrayOf("messages.message_id", "messages.payload", "messages.is_favorite"),
       selection, args, null, null,
       "messages.timestamp DESC, messages.message_id DESC", limit.toString()
     ).use { cursor ->
@@ -372,9 +402,44 @@ internal class NotificationStore private constructor(context: Context) :
         while (cursor.moveToNext()) {
           val payload = decodePayload(cursor.getString(1))
           payload["messageId"] = cursor.getLong(0)
+          payload["isFavorite"] = cursor.getInt(2) == 1
           add(payload)
         }
       }
+    }
+  }
+
+  fun getKakaoMessage(messageId: Long): Map<String, Any?>? {
+    require(messageId > 0) { "messageId must be positive" }
+    return getKakaoMessage(readableDatabase, messageId)
+  }
+
+  private fun getKakaoMessage(db: SQLiteDatabase, messageId: Long): Map<String, Any?>? = db.query(
+    "kakao_messages AS messages", arrayOf("messages.message_id", "messages.payload", "messages.is_favorite"),
+    "messages.message_id = ? AND $VERIFIED_ROOM_SELECTION AND ($VISIBLE_MESSAGE_SELECTION)",
+    arrayOf(messageId.toString()), null, null, null, "1"
+  ).use { cursor ->
+    if (!cursor.moveToFirst()) return@use null
+    decodePayload(cursor.getString(1)) + mapOf(
+      "messageId" to cursor.getLong(0), "isFavorite" to (cursor.getInt(2) == 1)
+    )
+  }
+
+  fun setMessageFavorite(messageId: Long, favorite: Boolean): Map<String, Any?> {
+    require(messageId > 0) { "messageId must be positive" }
+    val db = writableDatabase
+    db.beginTransaction()
+    try {
+      val message = getKakaoMessage(db, messageId)
+        ?: throw IllegalArgumentException("메시지가 삭제되었거나 등록하지 않은 채팅방의 메시지입니다.")
+      val values = ContentValues().apply { put("is_favorite", if (favorite) 1 else 0) }
+      check(db.update("kakao_messages", values, "message_id = ?", arrayOf(messageId.toString())) == 1) {
+        "즐겨찾기를 저장하지 못했습니다."
+      }
+      db.setTransactionSuccessful()
+      return message + mapOf("isFavorite" to favorite)
+    } finally {
+      db.endTransaction()
     }
   }
 

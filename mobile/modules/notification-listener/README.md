@@ -1,9 +1,13 @@
 # notification-listener
 
 Android의 `NotificationListenerService`로 **이름을 확인한 카카오톡 채팅방의 메시지**를 앱 내부 SQLite에 저장하는 로컬 Expo 모듈입니다.
-미등록 방의 메시지도 저장하지만 화면에는 숨깁니다. **추적 채팅방** 탭에서 알림으로 발견한 방을 선택하거나 이름을 직접 등록하면, 등록 전에 저장된 기록까지 **메시지** 탭에 표시합니다.
+미등록 방의 메시지도 저장하지만 화면에는 숨깁니다. **채팅방 추가** 탭에서 알림으로 발견한 방을 선택하거나 이름을 직접 등록하면, 등록 전에 저장된 기록까지 **메시지** 탭에 표시합니다.
 여러 방을 등록·삭제하고 채팅방·발신자·본문·시각을 목록으로 확인할 수 있습니다.
 메시지는 시각 내림차순으로 조회하며, 100개씩 이전 기록을 추가로 불러올 수 있습니다.
+
+탭 순서는 **메시지(index) → 즐겨찾기 → 채팅방 추가**입니다. 메시지 화면은 채팅방별로 두 줄 미리보기 카드를 보여줍니다.
+카드를 누르면 별도 상세 화면에서 전체 본문·발신자·시각을 확인할 수 있고, 카드나 상세 화면의 별표로 즐겨찾기를 설정·해제할 수 있습니다.
+즐겨찾기는 앱을 다시 열어도 유지하며, 해당 채팅방의 등록을 해제해도 **즐겨찾기** 탭에서 볼 수 있습니다.
 
 ## 실행
 
@@ -16,7 +20,7 @@ npx expo run:android
 앱 식별자가 아직 없다면 첫 빌드에서 Android package 이름을 지정합니다.
 첫 화면의 **알림 접근 설정 열기**를 누르고 이 앱의 알림 접근을 허용합니다.
 일반 알림 표시 권한인 `POST_NOTIFICATIONS`와는 별개입니다.
-알림 접근을 허용하면 미등록 방도 메시지를 저장합니다. **추적 채팅방** 탭에서 표시할 방을 등록해야 메시지 목록에 나타납니다.
+알림 접근을 허용하면 미등록 방도 메시지를 저장합니다. **채팅방 추가** 탭에서 표시할 방을 등록해야 메시지 목록에 나타납니다.
 
 Expo가 `modules/`의 네이티브 코드와 Manifest를 자동으로 연결하므로 별도 패키지나 config plugin은 필요하지 않습니다.
 Expo Go는 지원하지 않으며, Kotlin 코드를 수정한 뒤에는 앱을 다시 빌드해야 합니다.
@@ -89,8 +93,10 @@ Bitmap, Icon, PendingIntent 등 지원하지 않는 객체는 원본 바이너�
 `isGroupChatSource`가 `inferred`이면 단체방 여부 역시 추정값입니다.
 버전·미리보기 설정에 따라 카카오톡이 제공하지 않는 내용은 추출할 수 없으며, 알림이 발생하지 않은 메시지나 과거 대화 내역은 수집할 수 없습니다.
 
-SQLite v5의 `tracked_rooms` 테이블에 표시할 방 이름을, `discovered_rooms` 테이블에 알림에서 발견한 방 이름을, `kakao_messages` 테이블에 메시지와 `room`/`room_source`를 별도로 보관합니다.
+SQLite v6의 `tracked_rooms` 테이블에 표시할 방 이름을, `discovered_rooms` 테이블에 알림에서 발견한 방 이름을, `kakao_messages` 테이블에 메시지와 `room`/`room_source`/`is_favorite`를 별도로 보관합니다.
 v5 업그레이드는 발견한 방 테이블만 추가하므로 기존 설정·메시지·원본 기록을 유지합니다. 이전 버전에서 버렸던 미등록 방 메시지는 복원할 수 없습니다.
+v6 업그레이드는 `is_favorite`를 기본값 0으로 추가하고 즐겨찾기 조회용 인덱스를 생성합니다. 기존 메시지·이름·설정은 그대로 유지합니다.
+알림 중복 수신이나 방 이름 등 메타데이터 보완은 즐겨찾기 상태를 변경하지 않습니다.
 업그레이드 때 원본·메시지 기록의 ID·본문·발신자·시각과 추적 설정을 보존합니다.
 과거 `title`/`sender`/`subText`/`summaryText`로 추정한 방 이름은 빈 이름과 `unknown`으로 변경해 추적·표시에서 제외합니다.
 동일 메시지가 이후 확인된 방 이름과 함께 다시 전달되면 기존 ID를 유지하면서 이름을 보완할 수 있습니다.
@@ -133,7 +139,7 @@ const subscription = NotificationListener.addListener('onKakaoMessage', (message
 subscription.remove();
 ```
 
-각 `KakaoMessage`는 `messageId`, `room`, `sender`, `msg`, `isGroupChat`, `timestamp`,
+각 `KakaoMessage`는 `messageId`, `isFavorite`, `room`, `sender`, `msg`, `isGroupChat`, `timestamp`,
 `timestampSource`, `roomSource`, `isGroupChatSource`, `notificationKey`를 제공합니다.
 `getKakaoMessages()`는 현재 등록한 방의 기록만 `(timestamp, messageId)` 내림차순으로 반환합니다. 필터를 DB에서 페이지 제한 전에 적용합니다.
 `beforeId`에는 이전 페이지 마지막 메시지 ID를 전달합니다. 추적 목록을 바꾸면 이전 페이지 커서를 버리고 처음부터 조회해야 합니다.
@@ -146,6 +152,27 @@ subscription.remove();
 `isDiscoveredRoomsSupported()`는 발견한 방 API의 지원 여부를 확인합니다. `getDiscoveredRooms()`는 등록 여부와 관계없이 발견한 이름을 공백·중복 정리 후 정렬해 반환합니다.
 `addDiscoveredRoomsListener(callback)` 또는 `addListener('onDiscoveredRoomsChanged', callback)`으로 새 이름이 저장된 시점을 구독하고 목록을 다시 조회할 수 있습니다.
 발견한 방 기능이 없는 구버전 APK에는 새 빌드 설치 안내를 표시하며 기존 수동 등록은 유지합니다.
+
+### 상세 보기와 즐겨찾기
+
+```ts
+if (NotificationListener.isFavoritesSupported()) {
+  const message = await NotificationListener.getKakaoMessage(messageId);
+  if (message) await NotificationListener.setMessageFavorite(message.messageId, !message.isFavorite);
+  const favorites = await NotificationListener.getFavoriteMessages({ limit: 100 });
+}
+const favoriteChanges = NotificationListener.addFavoriteMessagesListener((savedMessage) => {
+  // DB 저장이 완료된 메시지입니다. 홈·즐겨찾기·상세 화면을 함께 갱신할 수 있습니다.
+});
+favoriteChanges.remove();
+```
+
+`getFavoriteMessages({ limit?, beforeId? })`는 등록 여부와 무관하게 확인된 방의 즐겨찾기 메시지를 `(timestamp, messageId)` 내림차순으로 조회합니다.
+`getKakaoMessage(id)`는 등록한 방 또는 즐겨찾기 메시지의 상세 정보를 반환하며, 삭제되었거나 숨겨진 메시지는 `null`입니다.
+`setMessageFavorite(id, favorite)`는 DB에 저장된 최신 상태를 반환합니다. 숨겨진 미등록 메시지를 ID만으로 임의 등록할 수는 없으며, 등록 해제된 방의 기존 즐겨찾기는 해제할 수 있습니다.
+즐겨찾기를 바꾸면 저장 완료 후 같은 JS 런타임의 모든 목록과 상세 화면에 반영합니다. 실패하면 기존 표시 상태를 유지하고 재시도할 수 있습니다.
+`clearKakaoMessages()`는 즐겨찾기 상태를 포함한 모든 메시지를 삭제합니다.
+즐겨찾기 API가 없는 기존 APK에서도 일반 메시지 조회와 채팅방 등록은 유지하며, 상세·즐겨찾기 화면에는 새 개발 빌드 설치 안내를 표시합니다.
 
 이 기능은 새 Kotlin 코드와 DB 마이그레이션을 포함하므로 APK를 다시 빌드하여 설치해야 합니다.
 예전 개발 빌드에서는 새 APK 설치가 필요하다는 오류를 표시합니다.
@@ -191,7 +218,7 @@ if (NotificationListener.isAvailable()) {
 
 ## 기기 확인
 
-1. 새 APK를 설치하고 알림 접근 권한을 허용합니다. 등록된 방이 없는 상태에서 메시지를 받고, **메시지** 탭은 비어 있지만 **추적 채팅방**의 발견한 목록에 이름이 나타나는지 확인합니다. 미등록 방의 원본 알림은 보관하지 않아야 합니다.
+1. 새 APK를 설치하고 알림 접근 권한을 허용합니다. 등록된 방이 없는 상태에서 메시지를 받고, **메시지** 탭은 비어 있지만 **채팅방 추가**의 발견한 목록에 이름이 나타나는지 확인합니다. 미등록 방의 원본 알림은 보관하지 않아야 합니다.
 2. 발견한 1:1/단체방을 선택해 등록하면 등록 전에 받은 메시지가 바로 나타나는지 확인합니다. 등록한 방은 후보 목록에서 사라지고 미등록 방 메시지는 계속 숨겨져야 합니다. 이름 검색과 직접 입력도 확인합니다.
 3. 앱을 백그라운드로 보내거나 최근 앱 목록에서 닫은 뒤 메시지를 수신하고, 다시 열어 기록과 이전 페이지를 확인합니다.
 4. 같은 본문을 다른 시각에 두 번 보낸 경우 두 항목이 남고, 동일 알림의 재전달·재연결은 항목 수를 늘리지 않는지 확인합니다.
@@ -199,6 +226,8 @@ if (NotificationListener.isAvailable()) {
 6. 방을 삭제하고 메시지 탭으로 돌아가 해당 기록이 숨겨지는지 확인합니다. 숨긴 동안 새 메시지를 받은 뒤 같은 방을 다시 등록하면 기존 기록과 새 메시지가 모두 나타나는지, 앱 재시작 후에도 방 목록과 기록이 유지되는지 확인합니다.
 7. `title`이 발신자이고 두 대화 제목이 비어 있는 알림에서 `conversationShortcut`의 이름이 방 이름으로 사용되는지 확인합니다. 해당 정보까지 없는 알림은 발신자 이름으로 오인해 저장하지 않아야 합니다.
 8. 등록 화면을 연 채 새 방의 알림을 받으면 목록이 즉시 갱신되는지 확인합니다. 같은 알림을 다시 받아도 이름과 메시지가 중복되지 않아야 하며, 본문이 가려진 알림에서도 확인 가능한 방 이름은 후보에 나타나야 합니다.
+9. 작은 카드의 별을 눌러 상세 화면이 열리지 않고 즐겨찾기만 바뀌는지 확인합니다. 본문을 누르면 상세 화면에 줄바꿈을 포함한 전체 내용이 보이고, 뒤로 가기로 닫혀야 합니다.
+10. 홈·상세에서 즐겨찾기를 바꾸면 즐겨찾기 탭에도 반영되고, 앱 재시작과 채팅방 등록 해제 후에도 보관되는지 확인합니다. 즐겨찾기에서 해제하면 항목이 사라지고, 등록된 방의 홈 카드 별표도 함께 바뀌어야 합니다.
 
 공식 문서: [Expo 로컬 모듈](https://docs.expo.dev/modules/get-started/),
 [Android NotificationListenerService](https://developer.android.com/reference/android/service/notification/NotificationListenerService),

@@ -3,6 +3,8 @@ import { AppState } from 'react-native';
 
 import NotificationListener, { type KakaoMessage } from '@/modules/notification-listener';
 
+import { useMessageFavoriteActions } from './use-message-favorite-actions';
+
 const PAGE_SIZE = 100;
 
 function mergeMessages(current: KakaoMessage[], incoming: KakaoMessage[]): KakaoMessage[] {
@@ -18,6 +20,7 @@ function errorMessage(reason: unknown): string {
 }
 
 export function useKakaoMessages() {
+  const { favoritesSupported, favoritePendingIds, favoriteError, toggleFavorite } = useMessageFavoriteActions();
   const available = NotificationListener.isAvailable();
   const [granted, setGranted] = useState(false);
   const [messages, setMessages] = useState<KakaoMessage[]>([]);
@@ -37,9 +40,14 @@ export function useKakaoMessages() {
   const allowedRooms = useRef<Set<string> | null>(null);
   const olderCursor = useRef<number | undefined>(undefined);
   const moreHistory = useRef(false);
+  const favoriteChanges = useRef(new Map<number, boolean>());
 
   const merge = useCallback((incoming: KakaoMessage[]) => {
-    const allowed = incoming.filter((message) => allowedRooms.current?.has(message.room));
+    const allowed = incoming.filter((message) => allowedRooms.current?.has(message.room)).map((message) => ({
+      ...message,
+      // A page started before a save must not undo the confirmed favorite state.
+      isFavorite: favoriteChanges.current.get(message.messageId) ?? Boolean(message.isFavorite),
+    }));
     rows.current = mergeMessages(rows.current, allowed);
     setMessages(rows.current);
   }, []);
@@ -153,6 +161,15 @@ export function useKakaoMessages() {
       resetHistory();
       void refresh();
     });
+    const favoritesSubscription = NotificationListener.addFavoriteMessagesListener((message) => {
+      if (!mounted.current || owner !== lifecycle.current) return;
+      favoriteChanges.current.set(message.messageId, message.isFavorite);
+      // A favorite from an unregistered room must never enter the main feed.
+      rows.current = rows.current
+        .map((stored) => stored.messageId === message.messageId ? message : stored)
+        .filter((stored) => allowedRooms.current?.has(stored.room));
+      setMessages(rows.current);
+    });
     const appState = AppState.addEventListener('change', (state) => {
       if (state === 'active') void refresh();
     });
@@ -178,6 +195,7 @@ export function useKakaoMessages() {
       historyGeneration.current += 1;
       olderPending.current = false;
       roomsSubscription.remove();
+      favoritesSubscription.remove();
       subscription?.remove();
       appState.remove();
     };
@@ -185,6 +203,7 @@ export function useKakaoMessages() {
 
   return {
     available, granted, messages, trackedRooms, trackingLoading, refreshing, loadingMore, hasMore,
-    error: error ?? subscriptionError, refresh, loadMore, openSettings,
+    error: error ?? subscriptionError ?? favoriteError, refresh, loadMore, openSettings,
+    favoritesSupported, favoritePendingIds, toggleFavorite,
   };
 }
