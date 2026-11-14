@@ -21,6 +21,10 @@ declare class NotificationListenerNativeModule extends NativeModule<Notification
   clearKakaoMessages(): Promise<void>;
   getTrackedRooms(): Promise<string[]>;
   setTrackedRooms(rooms: string[]): Promise<string[]>;
+  getDiscoveredRooms(): Promise<string[]>;
+  getKakaoMessage(messageId: number): Promise<KakaoMessage | null>;
+  getFavoriteMessages(limit: number, beforeId: number | null): Promise<KakaoMessage[]>;
+  setMessageFavorite(messageId: number, favorite: boolean): Promise<KakaoMessage>;
 }
 
 const nativeModule =
@@ -62,6 +66,30 @@ function requireTrackedRoomsModule(): NotificationListenerNativeModule {
   return module;
 }
 
+function requireDiscoveredRoomsModule(): NotificationListenerNativeModule {
+  const module = requireModule();
+  if (typeof module.getDiscoveredRooms !== 'function') {
+    throw new Error('알림에서 발견한 채팅방 기능이 포함된 새 Android 개발 빌드를 설치해 주세요.');
+  }
+  requireRoomResolution(module);
+  return module;
+}
+
+function requireFavoritesModule(): NotificationListenerNativeModule {
+  const module = requireKakaoModule();
+  if (typeof module.getKakaoMessage !== 'function' || typeof module.getFavoriteMessages !== 'function'
+    || typeof module.setMessageFavorite !== 'function') {
+    throw new Error('즐겨찾기와 메시지 상세 기능이 포함된 새 Android 개발 빌드를 설치해 주세요.');
+  }
+  return module;
+}
+
+function validateMessageId(messageId: number): void {
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw new RangeError('messageId must be a positive safe integer');
+  }
+}
+
 function normalizeRooms(rooms: string[]): string[] {
   if (!Array.isArray(rooms) || rooms.some((room) => typeof room !== 'string')) {
     throw new TypeError('채팅방 이름은 문자열 목록이어야 합니다.');
@@ -72,6 +100,8 @@ function normalizeRooms(rooms: string[]): string[] {
 let knownRooms: string[] | null = null;
 let trackedRoomsQueue: Promise<void> = Promise.resolve();
 const trackedRoomsListeners = new Set<TrackedRoomsChangeListener>();
+const favoriteMessagesListeners = new Set<(message: KakaoMessage) => void>();
+let favoriteQueue: Promise<void> = Promise.resolve();
 
 function publishRooms(rooms: string[]): string[] {
   const normalized = normalizeRooms(rooms);
@@ -125,6 +155,60 @@ const NotificationListener = {
   isTrackedRoomsSupported(): boolean {
     return nativeModule !== null && typeof nativeModule.getTrackedRooms === 'function'
       && typeof nativeModule.setTrackedRooms === 'function' && nativeModule.roomResolutionVersion >= 1;
+  },
+
+  isDiscoveredRoomsSupported(): boolean {
+    return nativeModule !== null && typeof nativeModule.getDiscoveredRooms === 'function'
+      && nativeModule.roomResolutionVersion >= 1;
+  },
+
+  isFavoritesSupported(): boolean {
+    return nativeModule !== null && nativeModule.roomResolutionVersion >= 1
+      && typeof nativeModule.getKakaoMessages === 'function'
+      && typeof nativeModule.getKakaoMessage === 'function'
+      && typeof nativeModule.getFavoriteMessages === 'function'
+      && typeof nativeModule.setMessageFavorite === 'function';
+  },
+
+  async getKakaoMessage(messageId: number): Promise<KakaoMessage | null> {
+    validateMessageId(messageId);
+    return requireFavoritesModule().getKakaoMessage(messageId);
+  },
+
+  async getFavoriteMessages(options: GetKakaoMessagesOptions = {}): Promise<KakaoMessage[]> {
+    const { limit, beforeId } = pagination(options);
+    return requireFavoritesModule().getFavoriteMessages(limit, beforeId);
+  },
+
+  async setMessageFavorite(messageId: number, favorite: boolean): Promise<KakaoMessage> {
+    validateMessageId(messageId);
+    if (typeof favorite !== 'boolean') throw new TypeError('favorite must be a boolean');
+    const module = requireFavoritesModule();
+    const result = favoriteQueue.then(async () => {
+      const stored = await module.setMessageFavorite(messageId, favorite);
+      for (const listener of favoriteMessagesListeners) {
+        try { listener({ ...stored }); } catch { /* Subscribers cannot turn a saved change into a failure. */ }
+      }
+      return stored;
+    });
+    favoriteQueue = result.then(() => {}, () => {});
+    return result;
+  },
+
+  /** Publishes confirmed saves to all mounted message lists and detail views. */
+  addFavoriteMessagesListener(listener: (message: KakaoMessage) => void): EventSubscription {
+    favoriteMessagesListeners.add(listener);
+    return { remove() { favoriteMessagesListeners.delete(listener); } };
+  },
+
+  /** Observed names only. Registration controls which stored messages are visible. */
+  async getDiscoveredRooms(): Promise<string[]> {
+    return normalizeRooms(await requireDiscoveredRoomsModule().getDiscoveredRooms());
+  },
+
+  /** Re-read names after the native database commits a newly discovered room. */
+  addDiscoveredRoomsListener(listener: () => void): EventSubscription {
+    return requireDiscoveredRoomsModule().addListener('onDiscoveredRoomsChanged', listener);
   },
 
   async getTrackedRooms(): Promise<string[]> {
@@ -185,7 +269,8 @@ const NotificationListener = {
     eventName: EventName,
     listener: NotificationListenerEvents[EventName]
   ): EventSubscription {
-    const module = eventName === 'onKakaoMessage' ? requireKakaoModule() : requireModule();
+    const module = eventName === 'onKakaoMessage' ? requireKakaoModule()
+      : eventName === 'onDiscoveredRoomsChanged' ? requireDiscoveredRoomsModule() : requireModule();
     return module.addListener(eventName, listener);
   },
 

@@ -23,12 +23,16 @@ class NotificationListenerModule : Module() {
     sendEvent("onKakaoMessage", message)
   }
 
+  private val discoveredRoomsObserver: () -> Unit = {
+    sendEvent("onDiscoveredRoomsChanged", emptyMap<String, Any?>())
+  }
+
   override fun definition() = ModuleDefinition {
     Name("NotificationListener")
 
     Constant("roomResolutionVersion") { 1 }
 
-    Events("onNotificationPosted", "onKakaoMessage")
+    Events("onNotificationPosted", "onKakaoMessage", "onDiscoveredRoomsChanged")
 
     Function("isPermissionGranted") {
       val component = ComponentName(context, NotificationListenerService::class.java)
@@ -87,6 +91,17 @@ class NotificationListenerModule : Module() {
       }
     }
 
+    AsyncFunction("getDiscoveredRooms") { promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getDiscoveredRooms())
+        } catch (error: Exception) {
+          promise.reject("ERR_DISCOVERED_ROOMS_READ", "알림에서 발견한 채팅방 목록을 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
     AsyncFunction("setTrackedRooms") { rooms: List<String>, promise: Promise ->
       val application = context.applicationContext
       NotificationStore.executor.execute {
@@ -121,6 +136,39 @@ class NotificationListenerModule : Module() {
       }
     }
 
+    AsyncFunction("getKakaoMessage") { messageId: Long, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getKakaoMessage(messageId))
+        } catch (error: Exception) {
+          promise.reject("ERR_KAKAO_MESSAGE_READ", "메시지를 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("getFavoriteMessages") { limit: Int, beforeId: Long?, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).getFavoriteMessages(limit, beforeId))
+        } catch (error: Exception) {
+          promise.reject("ERR_FAVORITE_MESSAGES_READ", "즐겨찾기를 불러오지 못했습니다.", error)
+        }
+      }
+    }
+
+    AsyncFunction("setMessageFavorite") { messageId: Long, favorite: Boolean, promise: Promise ->
+      val application = context.applicationContext
+      NotificationStore.executor.execute {
+        try {
+          promise.resolve(NotificationStore.getInstance(application).setMessageFavorite(messageId, favorite))
+        } catch (error: Exception) {
+          promise.reject("ERR_MESSAGE_FAVORITE_WRITE", "즐겨찾기를 변경하지 못했습니다.", error)
+        }
+      }
+    }
+
     OnStartObserving("onNotificationPosted") {
       NotificationListenerService.observers.add(observer)
     }
@@ -137,9 +185,18 @@ class NotificationListenerModule : Module() {
       NotificationListenerService.kakaoObservers.remove(kakaoObserver)
     }
 
+    OnStartObserving("onDiscoveredRoomsChanged") {
+      NotificationListenerService.discoveredRoomsObservers.add(discoveredRoomsObserver)
+    }
+
+    OnStopObserving("onDiscoveredRoomsChanged") {
+      NotificationListenerService.discoveredRoomsObservers.remove(discoveredRoomsObserver)
+    }
+
     OnDestroy {
       NotificationListenerService.observers.remove(observer)
       NotificationListenerService.kakaoObservers.remove(kakaoObserver)
+      NotificationListenerService.discoveredRoomsObservers.remove(discoveredRoomsObserver)
     }
   }
 }

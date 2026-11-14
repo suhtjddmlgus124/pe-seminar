@@ -10,8 +10,9 @@ export default function AppTabs() {
   return (
     <NativeTabs
       backgroundColor={colors.background}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{ selected: { color: colors.text } }}>
+      indicatorColor={colors.accentSoft}
+      tintColor={colors.accent}
+      labelStyle={{ selected: { color: colors.accent } }}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>메시지</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
@@ -20,11 +21,16 @@ export default function AppTabs() {
         />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="favorites">
+        <NativeTabs.Trigger.Label>즐겨찾기</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: 'star', selected: 'star.fill' }} md="star" />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="tracked-rooms">
-        <NativeTabs.Trigger.Label>추적 채팅방</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>채팅방 추가</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
-          sf="bubble.left.and.bubble.right"
-          md="forum"
+          sf="plus.bubble"
+          md="add_comment"
         />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="explore" hidden />
