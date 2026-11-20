@@ -1,56 +1,44 @@
-# Welcome to your Expo app 👋
+# talkreminder
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+카카오톡 알림을 모아 채팅방별로 확인하고, 중요한 메시지를 즐겨찾기에 보관하는 Android 앱입니다.
 
-## Get started
+## 개발 서버 실행
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+저장소 루트에서 실행합니다. 처음 실행하거나 의존성이 바뀌었을 때는 `npm install`이 필요합니다.
 
 ```bash
-npm run reset-project
+cd mobile
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+휴대폰과 컴퓨터를 같은 네트워크에 연결한 뒤, 기존에 설치한 개발용 APK에서 개발 서버를 열거나 터미널의 QR 코드를 스캔합니다. 이 프로젝트는 `expo-dev-client`를 사용하므로 `npx expo start`가 개발용 앱을 기본 실행 대상으로 선택합니다. 실행 대상이 Expo Go로 바뀌었다면 터미널에서 `s`를 눌러 개발용 앱으로 전환할 수 있습니다.
 
-### Other setup steps
+카카오톡 알림 수집에는 앱의 알림 접근 권한과 자체 Android 모듈이 필요합니다. 이 기능은 Expo Go에서 사용할 수 없습니다.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+화면과 JavaScript 변경은 개발 서버를 통해 기존 개발용 APK에서 확인할 수 있습니다. 앱 표시 이름은 `talkreminder`로 설정되어 있으며, **휴대폰 홈 화면의 앱 이름은 개발용 APK를 다시 빌드하고 설치해야 바뀝니다.** 기존 개발용 APK와 계속 연결할 수 있도록 프로젝트 slug, URL scheme, Android 패키지명과 EAS 프로젝트 연결은 유지합니다.
 
-## Learn more
+## 테스터용 APK 배포
 
-To learn more about developing your project with Expo, look at the following resources:
+`preview` 빌드는 개발 서버 없이 실행되는 APK입니다. `mobile` 디렉터리에서 실행합니다.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+npx eas-cli@latest build --platform android --profile preview
+```
 
-## Join the community
+빌드가 완료되면 APK를 다운로드해 GitHub Releases에 첨부합니다. 첫 테스트 배포 버전은 `0.1.0`, Git 태그는 `v0.1.0`, 파일명은 `talkreminder-0.1.0.apk`를 사용합니다. GitHub 등록은 수동으로 진행합니다.
 
-Join our community of developers creating universal apps.
+사용자에게 표시되는 버전은 `app.json`, `package.json`, `package-lock.json`에서 함께 관리합니다. Android 설치·업데이트 순서는 `app.json`의 `android.versionCode`로 관리하므로, 다음 배포에서는 이전 빌드보다 큰 값으로 올려 주세요. 기존 설치 데이터를 유지하려면 Android 패키지명과 EAS 서명 키를 유지합니다.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+`development` 빌드와 `npx expo start`도 계속 사용할 수 있습니다. 두 빌드는 같은 Android 패키지명을 사용하므로 휴대폰에 설치하면 서로 교체됩니다.
+
+## 코드 확인
+
+`mobile` 디렉터리에서 실행합니다.
+
+```bash
+npx expo lint
+npx tsc --noEmit
+```
+
+실행 방식은 [Expo CLI 문서](https://docs.expo.dev/more/expo-cli/#launch-target), 표시 이름 설정은 [Expo SDK 58 앱 설정 문서](https://docs.expo.dev/versions/v58.0.0/config/app/#name)를 참고하세요.

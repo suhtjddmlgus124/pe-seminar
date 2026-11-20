@@ -9,15 +9,16 @@ export default function AppTabs() {
 
   return (
     <NativeTabs
-      backgroundColor={colors.background}
+      backgroundColor={colors.backgroundElement}
       indicatorColor={colors.accentSoft}
       tintColor={colors.accent}
-      labelStyle={{ selected: { color: colors.accent } }}>
+      iconColor={{ default: colors.textSecondary, selected: colors.accent }}
+      labelStyle={{ default: { color: colors.textSecondary, fontSize: 12 }, selected: { color: colors.accent, fontWeight: '600' } }}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>메시지</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
-          src={require('@/assets/images/tabIcons/home.png')}
-          renderingMode="template"
+          sf={{ default: 'bubble.left', selected: 'bubble.left.fill' }}
+          md="chat_bubble_outline"
         />
       </NativeTabs.Trigger>
 

@@ -21,7 +21,16 @@ export default function HomeScreen() {
   } = useKakaoMessages();
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [collapsedRooms, setCollapsedRooms] = useState<ReadonlySet<string>>(new Set());
   const theme = useTheme();
+  const toggleRoom = useCallback((room: string) => {
+    setCollapsedRooms((previous) => {
+      const next = new Set(previous);
+      if (next.has(room)) next.delete(room);
+      else next.add(room);
+      return next;
+    });
+  }, []);
   const sections = useMemo(() => {
     const rooms = new Map<string, KakaoMessage[]>();
     for (const message of messages) {
@@ -30,8 +39,13 @@ export default function HomeScreen() {
       rooms.set(message.room, room);
     }
     // Incoming messages are newest first, so rooms with the latest activity appear first.
-    return [...rooms].map(([title, data]) => ({ title, data }));
-  }, [messages]);
+    return [...rooms].map(([title, data]) => ({
+      key: title,
+      title,
+      collapsed: collapsedRooms.has(title),
+      data: collapsedRooms.has(title) ? [] : data,
+    }));
+  }, [messages, collapsedRooms]);
 
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
 
@@ -50,12 +64,12 @@ export default function HomeScreen() {
             <View style={styles.header}>
               <View style={styles.headingRow}>
                 <View style={styles.heading}>
-                  <ThemedText style={[styles.eyebrow, { color: theme.accent }]}>MY APP</ThemedText>
+                  <ThemedText style={[styles.eyebrow, { color: theme.accent }]}>talkreminder</ThemedText>
                   <ThemedText style={styles.title}>메시지</ThemedText>
                 </View>
                 <Link href="./tracked-rooms" asChild>
-                  <Pressable accessibilityRole="link" accessibilityLabel="채팅방 추가" style={({ pressed }) => [styles.addButton, { backgroundColor: theme.accentSoft }, pressed && styles.pressed]}>
-                    <ThemedText style={[styles.plus, { color: theme.accent }]}>＋</ThemedText>
+                  <Pressable accessibilityRole="link" accessibilityLabel="채팅방 추가" style={({ pressed }) => [styles.addButton, { backgroundColor: theme.accent }, pressed && styles.pressed]}>
+                    <ThemedText style={[styles.plus, { color: theme.onAccent }]}>＋</ThemedText>
                   </Pressable>
                 </Link>
               </View>
@@ -67,9 +81,9 @@ export default function HomeScreen() {
                     accessibilityLabel="알림 수집 설정"
                     accessibilityState={{ expanded: showSettings || !granted }}
                     onPress={() => setShowSettings((shown) => !shown)}
-                    style={[styles.status, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+                    style={[styles.status, { borderColor: theme.border, backgroundColor: theme.accentSoft }]}>
                     <View style={[styles.statusDot, { backgroundColor: granted ? theme.accent : theme.favorite }]} />
-                    <ThemedText style={styles.statusText} themeColor="textSecondary">
+                    <ThemedText style={styles.statusText} themeColor="text">
                       {trackingLoading ? '채팅방 확인 중' : granted ? `알림 수집 중 · ${trackedRooms.length}개 채팅방 등록` : '알림 접근 권한이 필요해요'}
                     </ThemedText>
                     <ThemedText themeColor="textSecondary" style={styles.chevron}>{showSettings || !granted ? '⌃' : '⌄'}</ThemedText>
@@ -95,10 +109,18 @@ export default function HomeScreen() {
             </View>
           }
           renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeading}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${section.title} 메시지 ${section.collapsed ? '펼치기' : '접기'}`}
+              accessibilityState={{ expanded: !section.collapsed }}
+              onPress={() => toggleRoom(section.title)}
+              style={({ pressed }) => [styles.sectionHeading, section.collapsed && { backgroundColor: theme.accentSoft }, pressed && styles.pressed]}>
               <View style={[styles.sectionMark, { backgroundColor: theme.accent }]} />
               <ThemedText style={styles.sectionTitle} numberOfLines={2}>{section.title}</ThemedText>
-            </View>
+              <ThemedText accessible={false} themeColor="accent" style={styles.sectionChevron}>
+                {section.collapsed ? '▸' : '▾'}
+              </ThemedText>
+            </Pressable>
           )}
           renderSectionFooter={() => <View style={styles.sectionGap} />}
           renderItem={({ item }) => (
@@ -128,22 +150,23 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
-  list: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: BottomTabInset + 24 },
-  header: { gap: 14, marginBottom: 16 },
+  list: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: BottomTabInset + 24 },
+  header: { gap: 16, marginBottom: 24 },
   headingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 16 },
-  heading: { gap: 4 },
-  eyebrow: { fontSize: 11, lineHeight: 16, letterSpacing: 2, fontWeight: '800' },
-  title: { fontSize: 30, lineHeight: 38, fontWeight: '700', letterSpacing: -0.8 },
-  addButton: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  heading: { gap: 6 },
+  eyebrow: { fontSize: 12, lineHeight: 18, letterSpacing: 0.4, fontWeight: '700' },
+  title: { fontSize: 32, lineHeight: 40, fontWeight: '700', letterSpacing: -1 },
+  addButton: { width: 48, height: 48, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   plus: { fontSize: 27, lineHeight: 34 },
-  status: { flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: 8, borderWidth: 1, paddingHorizontal: 12, borderRadius: 12 },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusText: { flex: 1, fontSize: 12, lineHeight: 18 },
+  status: { flexDirection: 'row', alignItems: 'center', minHeight: 48, gap: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 16 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '500' },
   chevron: { fontSize: 20, lineHeight: 24 },
-  settings: { padding: 14, borderRadius: 14, borderWidth: 1, gap: 12 },
-  sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: 8, paddingBottom: 12 },
-  sectionMark: { width: 4, height: 16, borderRadius: 2 },
-  sectionTitle: { flex: 1, fontSize: 16, lineHeight: 22, fontWeight: '700' },
-  sectionGap: { height: 16 },
+  settings: { padding: 16, borderRadius: 18, borderWidth: 1, gap: 14 },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 12, paddingHorizontal: 8, marginBottom: 8, borderRadius: 14 },
+  sectionMark: { width: 4, height: 18, borderRadius: 2 },
+  sectionTitle: { flex: 1, fontSize: 14, lineHeight: 21, fontWeight: '700' },
+  sectionChevron: { width: 24, fontSize: 20, lineHeight: 24, textAlign: 'center' },
+  sectionGap: { height: 20 },
   pressed: { opacity: 0.6 },
 });

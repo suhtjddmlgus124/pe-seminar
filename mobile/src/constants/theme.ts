@@ -1,7 +1,4 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://unistyl.es/), etc.
- */
+/** A quiet teal palette for collecting and revisiting conversations. */
 
 import '@/global.css';
 
@@ -9,28 +6,30 @@ import { Platform } from 'react-native';
 
 export const Colors = {
   light: {
-    text: '#242130',
-    background: '#F7F6FA',
+    text: '#173B3D',
+    background: '#F5F8F7',
     backgroundElement: '#FFFFFF',
-    backgroundSelected: '#EEE9FA',
-    textSecondary: '#777181',
-    border: '#E9E5EF',
-    accent: '#7057AD',
-    accentSoft: '#EEE9FA',
-    favorite: '#946500',
-    favoriteSoft: '#FFF4CF',
+    backgroundSelected: '#EDF8F5',
+    textSecondary: '#607573',
+    border: '#DCE8E5',
+    accent: '#157A7E',
+    accentSoft: '#EDF8F5',
+    onAccent: '#FFFFFF',
+    favorite: '#157A7E',
+    favoriteSoft: '#EDF8F5',
   },
   dark: {
-    text: '#F3EFF8',
-    background: '#17151D',
-    backgroundElement: '#23202C',
-    backgroundSelected: '#352C49',
-    textSecondary: '#AFA7BC',
-    border: '#393242',
-    accent: '#C1AAEF',
-    accentSoft: '#352C49',
-    favorite: '#F1C552',
-    favoriteSoft: '#3C321C',
+    text: '#EDF7F4',
+    background: '#101D1F',
+    backgroundElement: '#192B2E',
+    backgroundSelected: '#233F40',
+    textSecondary: '#A4BBB6',
+    border: '#30484A',
+    accent: '#78D1C7',
+    accentSoft: '#233F40',
+    onAccent: '#103235',
+    favorite: '#78D1C7',
+    favoriteSoft: '#233F40',
   },
 } as const;
 

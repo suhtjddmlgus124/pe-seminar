@@ -36,16 +36,16 @@ export default function FavoritesScreen() {
             <View style={styles.header}>
               <View style={styles.headingRow}>
                 <View style={styles.heading}>
-                  <ThemedText style={[styles.eyebrow, { color: theme.accent }]}>SAVED MESSAGES</ThemedText>
+                  <ThemedText style={[styles.eyebrow, { color: theme.accent }]}>talkreminder</ThemedText>
                   <ThemedText style={styles.title}>즐겨찾기</ThemedText>
                 </View>
-                <View style={[styles.badge, { backgroundColor: theme.favoriteSoft }]}>
-                  <ThemedText style={[styles.star, { color: theme.favorite }]} accessible={false}>★</ThemedText>
+                <View style={[styles.badge, { backgroundColor: theme.accentSoft }]}>
+                  <ThemedText style={[styles.star, { color: theme.accent }]} accessible={false}>★</ThemedText>
                 </View>
               </View>
               <ThemedText type="small" themeColor="textSecondary">다시 보고 싶은 메시지만 한곳에 모았어요.</ThemedText>
               {available && supported && (
-                <ThemedText style={styles.note} themeColor="textSecondary">채팅방 등록을 해제해도 별표한 메시지는 여기에 남습니다.</ThemedText>
+                <ThemedText style={[styles.note, { backgroundColor: theme.accentSoft, borderColor: theme.border }]} themeColor="textSecondary">채팅방 등록을 해제해도 별표한 메시지는 여기에 남습니다.</ThemedText>
               )}
               {error && <MessageError error={error} onRetry={() => { void refresh(); }} disabled={refreshing} />}
             </View>
@@ -79,13 +79,13 @@ export default function FavoritesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
-  list: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: BottomTabInset + 24 },
-  header: { gap: 14, marginBottom: 24 },
+  list: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: BottomTabInset + 24 },
+  header: { gap: 16, marginBottom: 28 },
   headingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 16 },
-  heading: { gap: 4 },
-  eyebrow: { fontSize: 11, lineHeight: 16, letterSpacing: 1.6, fontWeight: '800' },
-  title: { fontSize: 30, lineHeight: 38, fontWeight: '700', letterSpacing: -0.8 },
-  badge: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  heading: { gap: 6 },
+  eyebrow: { fontSize: 12, lineHeight: 18, letterSpacing: 0.4, fontWeight: '700' },
+  title: { fontSize: 32, lineHeight: 40, fontWeight: '700', letterSpacing: -1 },
+  badge: { width: 48, height: 48, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   star: { fontSize: 28, lineHeight: 36 },
-  note: { fontSize: 12, lineHeight: 18 },
+  note: { fontSize: 12, lineHeight: 19, padding: 14, borderRadius: 16, borderWidth: 1 },
 });
