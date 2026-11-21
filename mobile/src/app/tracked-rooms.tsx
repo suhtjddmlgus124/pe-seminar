@@ -2,7 +2,6 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Button,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,28 +11,42 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { MessageAction } from '@/components/message-ui';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { useDiscoveredRooms } from '@/hooks/use-discovered-rooms';
 import { useTheme } from '@/hooks/use-theme';
 import { useTrackedRooms } from '@/hooks/use-tracked-rooms';
 
 export default function TrackedRoomsScreen() {
   const { available, supported, rooms, loading, saving, error, refresh, addRoom, removeRoom } = useTrackedRooms();
+  const {
+    supported: discoverySupported, rooms: discoveredRooms, loading: discovering,
+    error: discoveryError, refresh: refreshDiscovered,
+  } = useDiscoveredRooms();
   const [name, setName] = useState('');
+  const [search, setSearch] = useState('');
+  const [visibleCount, setVisibleCount] = useState(10);
   const theme = useTheme();
   const mounted = useRef(false);
   const busy = loading || saving;
   const editable = available && supported && !busy;
   const duplicate = name.trim().length > 0 && rooms.includes(name.trim());
   const canAdd = editable && name.trim().length > 0 && !duplicate;
+  const registered = new Set(rooms);
+  const candidates = discoveredRooms.filter((room) => !registered.has(room));
+  const matchingCandidates = candidates.filter((room) => room.toLowerCase().includes(search.trim().toLowerCase()));
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
 
-  useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  useFocusEffect(useCallback(() => {
+    void refresh();
+    void refreshDiscovered();
+  }, [refresh, refreshDiscovered]));
 
   const submitRoom = () => {
     if (!canAdd) return;
@@ -54,23 +67,25 @@ export default function TrackedRoomsScreen() {
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             automaticallyAdjustKeyboardInsets>
-            <View style={styles.section}>
-              <ThemedText type="subtitle">추적 채팅방</ThemedText>
-              <ThemedText themeColor="textSecondary">
-                추적할 카카오톡 채팅방 이름을 등록하세요. 여러 방을 등록할 수 있습니다.
-              </ThemedText>
+            <View style={styles.heading}>
+              <View style={styles.titleGroup}>
+                <ThemedText style={[styles.eyebrow, { color: theme.accent }]}>talkreminder</ThemedText>
+                <ThemedText style={styles.title}>채팅방 추가</ThemedText>
+              </View>
               <ThemedText type="small" themeColor="textSecondary">
-                저장한 이름과 정확히 일치하는 방만 수집합니다. 앞뒤 공백은 제거되며,
-                이름 안의 공백·기호·대소문자도 일치해야 합니다.
+                알림에서 찾은 카카오톡 채팅방을 선택하거나 이름을 직접 입력해 등록하세요.
+                여러 방을 등록할 수 있습니다.
               </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                등록 후 도착하는 새 알림부터 추적합니다. Android에서 채팅방 이름을 확인할 수 있는
-                알림만 수집합니다. 발신자 이름을 채팅방 이름으로 대신 사용하지 않습니다.
-              </ThemedText>
+              <View style={[styles.notice, { backgroundColor: theme.accentSoft }]}>
+                <ThemedText type="small" style={[styles.noticeText, { color: theme.accent }]}>
+                  알림 접근을 허용하면 채팅방 이름을 확인할 수 있는 알림의 메시지를 기기에 저장합니다.
+                  미등록 방의 메시지도 보관하며, 채팅방을 등록하면 저장해 둔 내용이 표시됩니다.
+                </ThemedText>
+              </View>
             </View>
 
             {!available ? (
-              <ThemedView type="backgroundElement" style={styles.card}>
+              <ThemedView type="backgroundElement" style={[styles.card, { borderColor: theme.border }]}>
                 <ThemedText type="smallBold">Android 앱에서 사용할 수 있습니다.</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   알림 수집 모듈이 포함된 Android 앱에서 추적 채팅방을 등록해 주세요.
@@ -82,8 +97,92 @@ export default function TrackedRoomsScreen() {
               </ThemedText>
             ) : undefined}
 
-            <ThemedView type="backgroundElement" style={styles.card}>
-              <ThemedText type="smallBold">채팅방 이름</ThemedText>
+            {available && supported && (
+              <View style={styles.section}>
+                <View style={styles.sectionHeading}>
+                  <ThemedText style={styles.sectionTitle}>알림에서 찾은 채팅방</ThemedText>
+                  <View style={[styles.countBadge, { backgroundColor: theme.accentSoft }]}>
+                    <ThemedText style={[styles.count, { color: theme.accent }]}>{candidates.length}</ThemedText>
+                  </View>
+                </View>
+                <ThemedText type="small" themeColor="textSecondary">
+                  알림에서 확인한 채팅방 이름입니다. 원하는 방을 등록하면 이미 저장된 메시지와
+                  앞으로 도착하는 메시지를 메시지 탭에서 볼 수 있습니다.
+                </ThemedText>
+                {!discoverySupported ? (
+                  <ThemedText type="small" themeColor="textSecondary">
+                    알림에서 찾은 채팅방을 선택하려면 새 Android 앱을 설치해 주세요.
+                    아래에서 이름을 직접 입력해 등록할 수도 있습니다.
+                  </ThemedText>
+                ) : (
+                  <>
+                    {candidates.length > 0 && (
+                      <TextInput
+                        accessibilityLabel="알림에서 찾은 채팅방 검색"
+                        placeholder="채팅방 이름 검색"
+                        placeholderTextColor={theme.textSecondary}
+                        value={search}
+                        onChangeText={(value) => { setSearch(value); setVisibleCount(10); }}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        underlineColorAndroid="transparent"
+                        style={[
+                          styles.input,
+                          { color: theme.text, backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                        ]}
+                      />
+                    )}
+                    {matchingCandidates.slice(0, visibleCount).map((room) => (
+                      <ThemedView type="backgroundElement" key={room} style={[styles.roomRow, { borderColor: theme.border }]}>
+                        <ThemedText selectable style={styles.roomName}>{room}</ThemedText>
+                        <MessageAction
+                          title="등록"
+                          accessibilityLabel={`${room} 추적 등록`}
+                          onPress={() => { if (editable) void addRoom(room); }}
+                          disabled={!editable}
+                        />
+                      </ThemedView>
+                    ))}
+                    {matchingCandidates.length > visibleCount && (
+                      <MessageAction variant="quiet" title="채팅방 더 보기" onPress={() => setVisibleCount((count) => count + 10)} />
+                    )}
+                    {discovering && (
+                      <View style={styles.progress}>
+                        <ActivityIndicator color={theme.textSecondary} />
+                        <ThemedText type="small" themeColor="textSecondary" accessibilityLiveRegion="polite">
+                          알림에서 찾은 채팅방을 불러오는 중입니다.
+                        </ThemedText>
+                      </View>
+                    )}
+                    {discoveryError && <ThemedText accessibilityRole="alert">{discoveryError}</ThemedText>}
+                    {!discovering && !discoveryError && candidates.length === 0 && (
+                      <ThemedView type="backgroundElement" style={[styles.card, { borderColor: theme.border }]}>
+                        <ThemedText>새로 등록할 채팅방이 없습니다.</ThemedText>
+                        <ThemedText type="small" themeColor="textSecondary">
+                          알림 접근을 허용한 뒤 카카오톡 알림을 받으면, 이름을 확인할 수 있는
+                          채팅방이 여기에 나타납니다. 이미 등록한 방은 표시하지 않습니다.
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    {candidates.length > 0 && matchingCandidates.length === 0 && (
+                      <ThemedText type="small" themeColor="textSecondary">검색한 이름의 채팅방이 없습니다.</ThemedText>
+                    )}
+                    <MessageAction
+                      variant="quiet"
+                      title={discoveryError ? '발견한 채팅방 다시 불러오기' : '발견한 채팅방 새로고침'}
+                      onPress={() => { void refreshDiscovered(); }}
+                      disabled={discovering}
+                    />
+                  </>
+                )}
+              </View>
+            )}
+
+            <ThemedView type="backgroundElement" style={[styles.card, { borderColor: theme.border }]}>
+              <ThemedText style={styles.sectionTitle}>이름 직접 입력</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                앞뒤 공백을 제외하고 이름 안의 공백·기호·대소문자까지 정확히 일치해야 합니다.
+              </ThemedText>
               <TextInput
                 accessibilityLabel="추적할 카카오톡 채팅방 이름"
                 accessibilityHint="카카오톡에 표시되는 채팅방 이름을 정확히 입력해 주세요."
@@ -100,7 +199,7 @@ export default function TrackedRoomsScreen() {
                 underlineColorAndroid="transparent"
                 style={[
                   styles.input,
-                  { color: theme.text, backgroundColor: theme.background, borderColor: theme.textSecondary },
+                  { color: theme.text, backgroundColor: theme.background, borderColor: theme.border },
                   !editable && styles.disabled,
                 ]}
               />
@@ -109,14 +208,14 @@ export default function TrackedRoomsScreen() {
                   이미 등록한 채팅방입니다.
                 </ThemedText>
               )}
-              <Button title="채팅방 등록" disabled={!canAdd} onPress={submitRoom} />
+              <MessageAction variant="primary" title="채팅방 등록" disabled={!canAdd} onPress={submitRoom} />
             </ThemedView>
 
             {error && (
               <View style={styles.section}>
                 <ThemedText accessibilityRole="alert">{error}</ThemedText>
                 {available && supported && (
-                  <Button title="다시 불러오기" onPress={() => { void refresh(); }} disabled={busy} />
+                  <MessageAction title="다시 불러오기" onPress={() => { void refresh(); }} disabled={busy} />
                 )}
               </View>
             )}
@@ -131,28 +230,35 @@ export default function TrackedRoomsScreen() {
             )}
 
             <View style={styles.section}>
-              <ThemedText type="smallBold">등록한 채팅방 · {rooms.length}</ThemedText>
+              <View style={styles.sectionHeading}>
+                <ThemedText style={styles.sectionTitle}>등록한 채팅방</ThemedText>
+                <View style={[styles.countBadge, { backgroundColor: theme.accentSoft }]}>
+                  <ThemedText style={[styles.count, { color: theme.accent }]}>{rooms.length}</ThemedText>
+                </View>
+              </View>
               {rooms.map((room) => (
-                <ThemedView type="backgroundElement" key={room} style={styles.roomRow}>
+                <ThemedView type="backgroundElement" key={room} style={[styles.roomRow, { borderColor: theme.border }]}>
                   <ThemedText selectable style={styles.roomName}>{room}</ThemedText>
-                  <Button
-                    title="삭제"
-                    accessibilityLabel={`${room} 추적 중단`}
+                  <MessageAction
+                    variant="quiet"
+                    title="등록 해제"
+                    accessibilityLabel={`${room} 등록 해제 및 메시지 숨기기`}
                     onPress={() => { void removeRoom(room); }}
                     disabled={!editable}
                   />
                 </ThemedView>
               ))}
               {rooms.length === 0 && !loading && available && supported && !error && (
-                <ThemedView type="backgroundElement" style={styles.card}>
+                <ThemedView type="backgroundElement" style={[styles.card, { borderColor: theme.border }]}>
                   <ThemedText>등록한 채팅방이 없습니다.</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
-                    채팅방을 등록하기 전까지 새 메시지를 수집하지 않습니다.
+                    채팅방을 등록하면 알림에서 저장해 둔 메시지를 볼 수 있습니다.
                   </ThemedText>
                 </ThemedView>
               )}
               <ThemedText type="small" themeColor="textSecondary">
-                채팅방을 삭제하면 이후 추적만 중단합니다. 기존에 저장한 메시지 기록은 삭제되지 않습니다.
+                등록을 해제하면 메시지 목록에서만 숨깁니다. 메시지 저장은 계속되며,
+                다시 등록하면 보관한 기록을 볼 수 있습니다. 수집을 중지하려면 알림 접근 권한을 해제하세요.
               </ThemedText>
             </View>
           </ScrollView>
@@ -166,15 +272,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
   keyboardArea: { flex: 1 },
-  content: { padding: Spacing.four, paddingBottom: BottomTabInset + Spacing.four, gap: Spacing.four },
-  section: { gap: Spacing.three },
-  card: { padding: Spacing.three, borderRadius: Spacing.three, gap: Spacing.two },
-  input: { minHeight: 48, borderWidth: 1, borderRadius: Spacing.two, padding: Spacing.three, fontSize: 16 },
+  content: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: BottomTabInset + Spacing.four, gap: 28 },
+  heading: { gap: 14 },
+  titleGroup: { gap: 6 },
+  eyebrow: { fontSize: 12, lineHeight: 18, letterSpacing: 0.4, fontWeight: '700' },
+  title: { fontSize: 32, lineHeight: 40, fontWeight: '700', letterSpacing: -1 },
+  notice: { padding: 16, borderRadius: 18 },
+  noticeText: { fontSize: 13, lineHeight: 21 },
+  section: { gap: 12 },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionTitle: { fontSize: 16, lineHeight: 24, fontWeight: '700', flexShrink: 1 },
+  countBadge: { minWidth: 26, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 9, alignItems: 'center' },
+  count: { fontSize: 12, lineHeight: 20, fontWeight: '700' },
+  card: { padding: 18, borderRadius: 20, borderWidth: 1, gap: 12 },
+  input: { minHeight: 50, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, lineHeight: 22 },
   disabled: { opacity: 0.5 },
   progress: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   roomRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.three,
-    padding: Spacing.three, borderRadius: Spacing.three,
+    paddingVertical: 12, paddingLeft: 16, paddingRight: 10, borderRadius: 18, borderWidth: 1,
   },
-  roomName: { flex: 1 },
+  roomName: { flex: 1, minWidth: 0, fontSize: 15, lineHeight: 22, fontWeight: '600' },
 });

@@ -17,8 +17,11 @@ internal object TrackedRooms {
 
   fun isVerifiedSource(source: String?): Boolean = sourceRank(source) != Int.MAX_VALUE
 
+  fun isVerifiedRoom(room: String?, roomSource: String?): Boolean =
+    !room.isNullOrBlank() && isVerifiedSource(roomSource)
+
   fun matches(room: String, rooms: Set<String>, roomSource: String?): Boolean =
-    room.isNotBlank() && isVerifiedSource(roomSource) && room in rooms
+    isVerifiedRoom(room, roomSource) && room in rooms
 
   fun shouldUpdateRoom(
     storedRoom: String?,

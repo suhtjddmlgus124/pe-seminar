@@ -21,6 +21,44 @@ fun main() {
     equal(emptyList<ParsedKakaoMessage>(), parse("packageName" to "org.example"))
     equal(emptyList<ParsedKakaoMessage>(), parse("isGroupSummary" to true))
   }
+  test("room discovery works without a visible message body or timestamp") {
+    val payload = mapOf<String, Any?>(
+      "packageName" to "com.kakao.talk",
+      "conversationTitle" to "  공지방  "
+    )
+    equal("공지방" to "conversationTitle", KakaoMessageParser.resolveRoom(payload))
+    equal(emptyList<ParsedKakaoMessage>(), KakaoMessageParser.parse(payload))
+  }
+  test("room discovery excludes other apps and summary notifications even with a room title") {
+    for (overrides in listOf(
+      mapOf("packageName" to "org.example"), mapOf("isGroupSummary" to true)
+    )) {
+      equal(null, KakaoMessageParser.resolveRoom(base() + mapOf("conversationTitle" to "Room") + overrides))
+    }
+  }
+  test("room discovery never substitutes a sender or generic notification field") {
+    equal(null, KakaoMessageParser.resolveRoom(base() + mapOf(
+      "subText" to "Subtext", "summaryText" to "Summary", "groupKey" to "Group key",
+      "extras" to mapOf("android.messages" to listOf(mapOf("sender" to "Bob", "text" to "Body")))
+    )))
+    equal(null, KakaoMessageParser.resolveRoom(base() + mapOf(
+      "conversationTitle" to " ", "hiddenConversationTitle" to 42,
+      "conversationShortcut" to mapOf("longLabel" to false, "shortLabel" to "\n")
+    )))
+  }
+  test("discovery and message collection resolve exactly the same verified name") {
+    for (fields in listOf(
+      mapOf("conversationShortcut" to mapOf("longLabel" to " System Room ", "shortLabel" to "Short"),
+        "conversationTitle" to "Other room"),
+      mapOf("conversationShortcut" to mapOf("longLabel" to " ", "shortLabel" to "Short")),
+      mapOf("conversationTitle" to " Title "),
+      mapOf("extras" to mapOf("android.hiddenConversationTitle" to " Hidden "))
+    )) {
+      val payload = base() + fields
+      val message = KakaoMessageParser.parse(payload).single()
+      equal(message.room to message.roomSource, KakaoMessageParser.resolveRoom(payload))
+    }
+  }
   test("notification title is a sender fallback and never an unverified room") {
     val actual = parse().single()
     equal("", actual.room)

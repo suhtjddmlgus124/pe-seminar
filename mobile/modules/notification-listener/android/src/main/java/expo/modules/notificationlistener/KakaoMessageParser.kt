@@ -29,6 +29,21 @@ internal data class ParsedKakaoMessage(
 
 /** Parses normalized notification extras; it never guesses a timestamp or a verified room. */
 internal object KakaoMessageParser {
+  /** Room discovery does not require a visible message body or message timestamp. */
+  fun resolveRoom(payload: Map<String, Any?>): Pair<String, String>? {
+    if (payload["packageName"] != "com.kakao.talk" || payload["isGroupSummary"] == true) return null
+    val extras = payload["extras"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
+    fun field(fieldName: String): String? = name(payload[fieldName]) ?: name(extras["android.$fieldName"])
+    val shortcut = payload["conversationShortcut"] as? Map<*, *>
+    val shortcutLabel = name(shortcut?.get("longLabel")) ?: name(shortcut?.get("shortLabel"))
+    // Sender names and generic notification text are never evidence of a room name.
+    return listOf(
+      "conversationShortcut" to shortcutLabel,
+      "conversationTitle" to field("conversationTitle"),
+      "hiddenConversationTitle" to field("hiddenConversationTitle")
+    ).firstNotNullOfOrNull { (source, room) -> room?.let { it to source } }
+  }
+
   fun parse(payload: Map<String, Any?>): List<ParsedKakaoMessage> {
     if (payload["packageName"] != "com.kakao.talk" || payload["isGroupSummary"] == true) {
       return emptyList()
@@ -40,16 +55,10 @@ internal object KakaoMessageParser {
 
     val title = field("title")
     val shortcut = payload["conversationShortcut"] as? Map<*, *>
-    val shortcutLabel = name(shortcut?.get("longLabel")) ?: name(shortcut?.get("shortLabel"))
     // The system conversation shortcut can override MessagingStyle's displayed title.
-    // Sender names and generic notification text are never evidence of a room name.
-    val roomCandidate = listOf(
-      "conversationShortcut" to shortcutLabel,
-      "conversationTitle" to field("conversationTitle"),
-      "hiddenConversationTitle" to field("hiddenConversationTitle")
-    ).firstOrNull { it.second != null }
-    val room = roomCandidate?.second.orEmpty()
-    val roomSource = roomCandidate?.first ?: "unknown"
+    val roomCandidate = resolveRoom(payload)
+    val room = roomCandidate?.first.orEmpty()
+    val roomSource = roomCandidate?.second ?: "unknown"
     val explicitGroup = extras["android.isGroupConversation"] as? Boolean
       ?: payload["isGroupConversation"] as? Boolean
     val notificationTime = positiveTime(payload["notificationTimestamp"])

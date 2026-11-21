@@ -9,22 +9,29 @@ export default function AppTabs() {
 
   return (
     <NativeTabs
-      backgroundColor={colors.background}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{ selected: { color: colors.text } }}>
+      backgroundColor={colors.backgroundElement}
+      indicatorColor={colors.accentSoft}
+      tintColor={colors.accent}
+      iconColor={{ default: colors.textSecondary, selected: colors.accent }}
+      labelStyle={{ default: { color: colors.textSecondary, fontSize: 12 }, selected: { color: colors.accent, fontWeight: '600' } }}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>메시지</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
-          src={require('@/assets/images/tabIcons/home.png')}
-          renderingMode="template"
+          sf={{ default: 'bubble.left', selected: 'bubble.left.fill' }}
+          md="chat_bubble_outline"
         />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="favorites">
+        <NativeTabs.Trigger.Label>즐겨찾기</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: 'star', selected: 'star.fill' }} md="star" />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="tracked-rooms">
-        <NativeTabs.Trigger.Label>추적 채팅방</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>채팅방 추가</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
-          sf="bubble.left.and.bubble.right"
-          md="forum"
+          sf="plus.bubble"
+          md="add_comment"
         />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="explore" hidden />

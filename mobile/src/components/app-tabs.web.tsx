@@ -10,25 +10,29 @@ import type { ComponentProps } from 'react';
 import { Pressable, View, StyleSheet } from 'react-native';
 
 import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
 // Expo Router's slot ref still targets View; use the rendered Pressable's ref type.
 type TabButtonProps = Omit<TabTriggerSlotProps, 'ref'> &
-  Pick<ComponentProps<typeof Pressable>, 'ref'>;
+  Pick<ComponentProps<typeof Pressable>, 'ref'> & { glyph: string };
 
 export default function AppTabs() {
   return (
     <Tabs>
-      <TabSlot style={{ height: '100%', paddingTop: Spacing.six + Spacing.four }} />
+      <TabSlot style={{ height: '100%', paddingBottom: 84 }} />
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>메시지</TabButton>
+          <TabTrigger name="index" href="/" asChild>
+            <TabButton glyph="▤">메시지</TabButton>
+          </TabTrigger>
+          <TabTrigger name="favorites" href="./favorites" asChild>
+            <TabButton glyph="☆">즐겨찾기</TabButton>
           </TabTrigger>
           <TabTrigger name="tracked-rooms" href="./tracked-rooms" asChild>
-            <TabButton>추적 채팅방</TabButton>
+            <TabButton glyph="＋">채팅방 추가</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>
@@ -36,13 +40,14 @@ export default function AppTabs() {
   );
 }
 
-export function TabButton({ children, isFocused, ...props }: TabButtonProps) {
+export function TabButton({ children, isFocused, glyph, ...props }: TabButtonProps) {
   return (
     <Pressable {...props} style={({ pressed }) => [styles.tabButton, pressed && styles.pressed]}>
       <ThemedView
         type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
         style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
+        <ThemedText accessible={false} style={styles.tabGlyph} themeColor={isFocused ? 'accent' : 'textSecondary'}>{glyph}</ThemedText>
+        <ThemedText type="small" numberOfLines={1} style={[styles.tabLabel, isFocused && styles.selectedLabel]} themeColor={isFocused ? 'accent' : 'textSecondary'}>
           {children}
         </ThemedText>
       </ThemedView>
@@ -51,9 +56,10 @@ export function TabButton({ children, isFocused, ...props }: TabButtonProps) {
 }
 
 export function CustomTabList(props: TabListProps) {
+  const theme = useTheme();
   return (
     <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
+      <ThemedView type="backgroundElement" style={[styles.innerContainer, { borderColor: theme.border }]}>
         {props.children}
       </ThemedView>
     </View>
@@ -63,9 +69,10 @@ export function CustomTabList(props: TabListProps) {
 const styles = StyleSheet.create({
   tabListContainer: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     width: '100%',
-    padding: Spacing.three,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -73,7 +80,8 @@ const styles = StyleSheet.create({
   innerContainer: {
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.two,
-    borderRadius: Spacing.five,
+    borderRadius: 24,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     flexGrow: 1,
@@ -81,14 +89,17 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
   },
   tabButton: { flex: 1 },
+  tabLabel: { fontSize: 11, lineHeight: 16 },
+  tabGlyph: { fontSize: 21, lineHeight: 24 },
+  selectedLabel: { fontWeight: '700' },
   pressed: {
     opacity: 0.7,
   },
   tabButtonView: {
     paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
+    paddingHorizontal: Spacing.two,
     borderRadius: Spacing.three,
-    minHeight: 44,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
   },

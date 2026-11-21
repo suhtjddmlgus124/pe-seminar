@@ -59,6 +59,8 @@ export type GetCollectedNotificationsOptions = {
 
 export type KakaoMessage = {
   messageId: number;
+  /** Persisted independently of room registration. */
+  isFavorite: boolean;
   /** Confirmed conversation name; an empty string means it could not be resolved. */
   room: string;
   sender: string;
@@ -89,4 +91,5 @@ export type TrackedRoomsChangeListener = (rooms: string[]) => void;
 export type NotificationListenerEvents = {
   onNotificationPosted: (notification: CollectedNotification) => void;
   onKakaoMessage: (message: KakaoMessage) => void;
+  onDiscoveredRoomsChanged: () => void;
 };

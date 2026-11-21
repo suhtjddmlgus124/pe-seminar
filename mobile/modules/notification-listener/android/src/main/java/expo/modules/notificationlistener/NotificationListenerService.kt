@@ -14,6 +14,7 @@ class NotificationListenerService : AndroidNotificationListenerService() {
   companion object {
     internal val observers = CopyOnWriteArraySet<(Map<String, Any?>) -> Unit>()
     internal val kakaoObservers = CopyOnWriteArraySet<(Map<String, Any?>) -> Unit>()
+    internal val discoveredRoomsObservers = CopyOnWriteArraySet<() -> Unit>()
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -119,11 +120,12 @@ class NotificationListenerService : AndroidNotificationListenerService() {
     val application = applicationContext
     NotificationStore.executor.execute {
       try {
-        val (stored, messages) = NotificationStore.getInstance(application)
+        val (stored, messages, discoveredRoomsChanged) = NotificationStore.getInstance(application)
           .insertNotificationWithMessages(payload, receivedAt)
         // Persist first; UI subscribers are optional and never own the collection lifecycle.
-        if (stored != null || messages.isNotEmpty()) {
+        if (stored != null || messages.isNotEmpty() || discoveredRoomsChanged) {
           mainHandler.post {
+            if (discoveredRoomsChanged) discoveredRoomsObservers.forEach { it() }
             if (stored != null) observers.forEach { it(stored) }
             messages.forEach { message -> kakaoObservers.forEach { it(message) } }
           }
